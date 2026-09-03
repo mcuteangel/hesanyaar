@@ -645,6 +645,61 @@ class AppDatabaseMigrationTest {
   }
 
   /**
+   * Regression for the plaintext→encrypted transfer seam: archived persons must
+   * survive the real [AppDatabase.transferPlaintextData] path, not just the
+   * hand-simulated copy the earlier tests used. This test invokes the actual
+   * production helper with in-memory DBs (no sqlcipher) and verifies every
+   * table — including persons — reaches the target.
+   */
+  @Test
+  fun personsSurvivePlaintextTransferViaRealSeam() {
+    // Arrange: seed source with persons (including an archived one) plus a loan/transaction link
+    val personActive =
+      Person(
+        id = 0,
+        name = "علی رضایی",
+        normalizedName = "علی رضایی",
+        phone = "09120000000",
+        notes = "active",
+        createdAt = 1000L,
+        isArchived = false
+      )
+    val personArchived =
+      Person(
+        id = 0,
+        name = "سارا",
+        normalizedName = "سارا",
+        phone = null,
+        notes = null,
+        createdAt = 2000L,
+        isArchived = true
+      )
+    sourceDb.personDao().insertAllBlocking(listOf(personActive, personArchived))
+    val loan =
+      Loan(
+        id = 0,
+        personName = "علی رضایی",
+        type = LoanType.DEBTOR,
+        originalAmount = 500_000L,
+        remainingAmount = 500_000L,
+        description = "loan",
+        date = 100L,
+        isSettled = false
+      )
+    sourceDb.loanDao().insertLoan(loan)
+
+    // Act: invoke the real production transfer path
+    AppDatabase.transferPlaintextData(sourceDb, targetDb)
+
+    // Assert: both persons (including archived) and the loan survived
+    val migratedPersons = targetDb.personDao().getAllPersonsIncludingArchivedBlocking()
+    assertEquals("Both persons must survive transfer", 2, migratedPersons.size)
+    assertNotNull("Active person present", migratedPersons.find { it.name == "علی رضایی" })
+    assertTrue("Archived person present", migratedPersons.any { it.isArchived && it.name == "سارا" })
+    assertEquals("Loan survived", 1, targetDb.loanDao().getAllLoansBlocking().size)
+  }
+
+  /**
    * Display-name tiebreak policy (plans/011 §D4 addendum): loans-first-then-
    * transactions. A loan and a transaction share a normalized name but the
    * transaction's raw variant appears EARLIER (date=50 vs loan date=200).

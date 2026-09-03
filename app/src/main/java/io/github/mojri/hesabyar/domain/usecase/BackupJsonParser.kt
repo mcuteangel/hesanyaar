@@ -238,10 +238,7 @@ class BackupJsonParser(
         // PersonDao.IGNORE silently drops an empty key, so skip unnormalizable names.
         val display = PersonNameNormalizer.displayForm(rawName)
         val key = PersonNameNormalizer.normalize(display)
-        if (key.isEmpty()) {
-          Log.w(TAG, "parsePersons: skipping unnormalizable person id=${o.optLong("id", 0L)}")
-          return@mapNotNull null
-        }
+        require(key.isNotEmpty()) { "Person id=${o.optLong("id", 0L)} normalizes to empty (name=\"${rawName}\")" }
         Person(
           id = o.optLong("id", 0L),
           name = rawName,

@@ -300,4 +300,131 @@ class RustMappersTest {
 
     assertEquals("bankLoanId survives Kotlin→Rust→Kotlin round-trip", 42L, roundTripped.bankLoanId)
   }
+
+  // --- fromRustPerson / mapPerson person mapper branches ----------------------
+
+  @Test
+  fun fromRustPersonNormalizesNameAndPreservesDisplayForm() {
+    val rust =
+      io.github.mojri.hesabyar.rust.Person(
+        id = 1L,
+        name = "  علی  رضا  ",
+        normalizedName = "stale",
+        phone = "0912",
+        notes = "n",
+        createdAt = 1000L,
+        isArchived = false
+      )
+    val mapped = RustMappers.fromRustPerson(rust)
+    assertEquals("علی  رضا", mapped.name)
+    assertEquals("علی رضا", mapped.normalizedName)
+  }
+
+  @Test(expected = IllegalArgumentException::class)
+  fun fromRustPersonEmptyNormalizedNameThrows() {
+    val rust =
+      io.github.mojri.hesabyar.rust.Person(
+        id = 2L,
+        name = "   \u200B \u200C  ",
+        normalizedName = "",
+        phone = null,
+        notes = null,
+        createdAt = 0L,
+        isArchived = false
+      )
+    RustMappers.fromRustPerson(rust)
+  }
+
+  @Test
+  fun fromRustPersonCreatedAtZeroFallbacksToNow() {
+    val before = System.currentTimeMillis()
+    val rust =
+      io.github.mojri.hesabyar.rust.Person(
+        id = 3L,
+        name = "سارا",
+        normalizedName = "sara",
+        phone = null,
+        notes = null,
+        createdAt = 0L,
+        isArchived = false
+      )
+    val mapped = RustMappers.fromRustPerson(rust)
+    assertTrue("createdAt 0 must fallback to now: ${mapped.createdAt}", mapped.createdAt >= before)
+  }
+
+  @Test
+  fun fromRustPersonsFiltersOnlyViaThrowSemantics() {
+    val good =
+      io.github.mojri.hesabyar.rust.Person(
+        id = 10L,
+        name = "حسن",
+        normalizedName = "حسن",
+        phone = null,
+        notes = null,
+        createdAt = 1000L,
+        isArchived = false
+      )
+    val list = RustMappers.fromRustPersons(listOf(good))
+    assertEquals(1, list.size)
+    assertEquals("حسن", list[0].name)
+  }
+
+  @Test(expected = IllegalArgumentException::class)
+  fun fromRustPersonsThrowsOnBlankEntry() {
+    val good =
+      io.github.mojri.hesabyar.rust.Person(
+        id = 1L,
+        name = "حسن",
+        normalizedName = "حسن",
+        phone = null,
+        notes = null,
+        createdAt = 1000L,
+        isArchived = false
+      )
+    val bad =
+      io.github.mojri.hesabyar.rust.Person(
+        id = 2L,
+        name = "   ",
+        normalizedName = "",
+        phone = null,
+        notes = null,
+        createdAt = 0L,
+        isArchived = false
+      )
+    RustMappers.fromRustPersons(listOf(good, bad))
+  }
+
+  @Test(expected = IllegalArgumentException::class)
+  fun mapPersonEmptyNormalizedNameThrowsRequireGuard() {
+    val person =
+      io.github.mojri.hesabyar.data.Person(
+        id = 99L,
+        name = "   \u200B",
+        normalizedName = "",
+        phone = null,
+        notes = null,
+        createdAt = 1000L,
+        isArchived = false
+      )
+    RustMappers.mapPerson(person)
+  }
+
+  @Test
+  fun mapPersonsRoundTripsPhoneAndNotes() {
+    val person =
+      io.github.mojri.hesabyar.data.Person(
+        id = 0L,
+        name = "رضا",
+        normalizedName = "رضا",
+        phone = "0912",
+        notes = "note",
+        createdAt = 1234L,
+        isArchived = true
+      )
+    val rust = RustMappers.mapPerson(person)
+    val back = RustMappers.fromRustPerson(rust)
+    assertEquals("0912", back.phone)
+    assertEquals("note", back.notes)
+    assertEquals(true, back.isArchived)
+  }
 }

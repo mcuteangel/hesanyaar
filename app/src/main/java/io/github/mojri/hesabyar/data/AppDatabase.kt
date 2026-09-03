@@ -532,16 +532,17 @@ abstract class AppDatabase : RoomDatabase() {
             .addMigrations(*ALL_MIGRATIONS)
             .build()
 
-        encryptedDb.runInTransaction {
-          if (accounts.isNotEmpty()) encryptedDb.accountDao().insertAllBlocking(accounts)
-          if (categories.isNotEmpty()) encryptedDb.categoryDao().insertAllBlocking(categories)
-          if (transactions.isNotEmpty()) encryptedDb.transactionDao().insertAllBlocking(transactions)
-          if (loans.isNotEmpty()) encryptedDb.loanDao().insertAllBlocking(loans)
-          if (bankLoans.isNotEmpty()) encryptedDb.bankLoanDao().insertAllBlocking(bankLoans)
-          if (installments.isNotEmpty()) encryptedDb.installmentDao().insertAllBlocking(installments)
-          if (payments.isNotEmpty()) encryptedDb.paymentHistoryDao().insertAllBlocking(payments)
-          if (persons.isNotEmpty()) encryptedDb.personDao().insertAllBlocking(persons)
-        }
+        transferPlaintextData(
+          accounts = accounts,
+          categories = categories,
+          transactions = transactions,
+          loans = loans,
+          bankLoans = bankLoans,
+          installments = installments,
+          payments = payments,
+          persons = persons,
+          encryptedDb = encryptedDb
+        )
 
         encryptedDb.close()
 
@@ -572,6 +573,54 @@ abstract class AppDatabase : RoomDatabase() {
             overwrite = true
           )
         }
+    }
+
+    /**
+     * Test seam for the plaintext→encrypted transfer. Copies all tables from
+     * the read snapshot into [encryptedDb] in one transaction. Exposed as
+     * `internal` so [AppDatabaseMigrationTest] can invoke the real transfer
+     * path with in-memory DBs (no sqlcipher/header checks) and verify that
+     * archived persons and every other table survive the round-trip.
+     */
+    internal fun transferPlaintextData(
+      accounts: List<AccountEntity>,
+      categories: List<Category>,
+      transactions: List<Transaction>,
+      loans: List<Loan>,
+      bankLoans: List<BankLoan>,
+      installments: List<Installment>,
+      payments: List<PaymentHistory>,
+      persons: List<Person>,
+      encryptedDb: AppDatabase
+    ) {
+      encryptedDb.runInTransaction {
+        if (accounts.isNotEmpty()) encryptedDb.accountDao().insertAllBlocking(accounts)
+        if (categories.isNotEmpty()) encryptedDb.categoryDao().insertAllBlocking(categories)
+        if (transactions.isNotEmpty()) encryptedDb.transactionDao().insertAllBlocking(transactions)
+        if (loans.isNotEmpty()) encryptedDb.loanDao().insertAllBlocking(loans)
+        if (bankLoans.isNotEmpty()) encryptedDb.bankLoanDao().insertAllBlocking(bankLoans)
+        if (installments.isNotEmpty()) encryptedDb.installmentDao().insertAllBlocking(installments)
+        if (payments.isNotEmpty()) encryptedDb.paymentHistoryDao().insertAllBlocking(payments)
+        if (persons.isNotEmpty()) encryptedDb.personDao().insertAllBlocking(persons)
+      }
+    }
+
+    /** In-memory variant that reads from [plaintextDb] and writes to [encryptedDb]. */
+    internal fun transferPlaintextData(
+      plaintextDb: AppDatabase,
+      encryptedDb: AppDatabase
+    ) {
+      transferPlaintextData(
+        accounts = plaintextDb.accountDao().getAllAccountsBlocking(),
+        categories = plaintextDb.categoryDao().getAllCategoriesBlocking(),
+        transactions = plaintextDb.transactionDao().getAllTransactionsBlocking(),
+        loans = plaintextDb.loanDao().getAllLoansBlocking(),
+        bankLoans = plaintextDb.bankLoanDao().getAllBankLoansBlocking(),
+        installments = plaintextDb.installmentDao().getAllInstallmentsBlocking(),
+        payments = plaintextDb.paymentHistoryDao().getAllPaymentHistoriesBlocking(),
+        persons = plaintextDb.personDao().getAllPersonsIncludingArchivedBlocking(),
+        encryptedDb = encryptedDb
+      )
     }
   }
 }

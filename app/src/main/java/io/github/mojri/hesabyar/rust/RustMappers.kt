@@ -379,13 +379,10 @@ object RustMappers {
   fun fromRustAccounts(list: List<io.github.mojri.hesabyar.rust.Account>): List<AccountEntity> =
     list.map { fromRustAccount(it) }
 
-  // Returns null for names that normalize to empty (whitespace/zero-width-
-  // only), mirroring BackupJsonParser.parsePersons, so an empty UNIQUE NOT
-  // NULL key never reaches the persons table.
-  fun fromRustPerson(rust: io.github.mojri.hesabyar.rust.Person): Person? {
+  fun fromRustPerson(rust: io.github.mojri.hesabyar.rust.Person): Person {
     val display = PersonNameNormalizer.displayForm(rust.name)
     val normalizedName = PersonNameNormalizer.normalize(display)
-    if (normalizedName.isEmpty()) return null
+    require(normalizedName.isNotEmpty()) { "Person ${rust.id} normalizes to empty (name=\"${rust.name}\")" }
     return Person(
       id = rust.id,
       name = rust.name,
@@ -397,8 +394,7 @@ object RustMappers {
     )
   }
 
-  fun fromRustPersons(list: List<io.github.mojri.hesabyar.rust.Person>): List<Person> =
-    list.mapNotNull { fromRustPerson(it) }
+  fun fromRustPersons(list: List<io.github.mojri.hesabyar.rust.Person>): List<Person> = list.map { fromRustPerson(it) }
 
   fun mapPerson(person: Person): io.github.mojri.hesabyar.rust.Person {
     val normalizedName =

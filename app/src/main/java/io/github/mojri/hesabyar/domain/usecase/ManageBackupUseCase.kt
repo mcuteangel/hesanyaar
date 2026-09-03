@@ -251,31 +251,54 @@ class ManageBackupUseCase(
 
   /**
    * Decrypts one encrypted field of an account entry, keyed by [field] with a
-   * per-account, per-field AAD. Mirrors the inline `BackupCipher.decryptOrNull`
-   * call the pre-extraction code used; pulled out so `decryptBackupWithPassphrase`
-   * stays short and every field is decrypted the same way.
+   * per-account, per-field AAD.
+   *
+   * Returns null only when the raw entry carries no value (absent or JSON null).
+   * A present empty or non-string value is malformed ciphertext and fails loudly
+   * instead of returning null and silently keeping ciphertext as plaintext.
    */
   private fun decryptAccountField(
     account: AccountEntity,
     raw: JSONObject,
     key: SecretKey,
     field: String
-  ): String? = BackupCipher.decryptOrNull(raw.opt(field), key, BackupCipher.accountFieldAad(account.id, field))
+  ): String? {
+    if (!raw.has(field) || raw.isNull(field)) return null
+    val v = raw.opt(field)
+    if (v !is String) {
+      throw IllegalArgumentException("Account ${account.id} field $field is not a string: $v")
+    }
+    if (v.isEmpty()) {
+      throw IllegalArgumentException("Account ${account.id} field $field is empty ciphertext")
+    }
+    return BackupCipher.decrypt(v, key, BackupCipher.accountFieldAad(account.id, field))
+  }
 
   /**
    * Decrypts one encrypted field of a person entry, keyed by [field] with a
    * per-person, per-field AAD. Mirrors [decryptAccountField].
    *
-   * Returns null only when the raw entry carries no non-empty value for [field].
-   * A present value that fails the AES-GCM tag check is not swallowed — the
-   * exception propagates, so tampering never degrades into a silent null.
+   * Returns null only when the raw entry carries no value (absent or JSON null).
+   * A present value that is empty, non-string, or fails the AES-GCM tag check
+   * is not swallowed — an exception propagates so a malformed ciphertext never
+   * degrades into a silent null and erases PII.
    */
   private fun decryptPersonField(
     person: Person,
     raw: JSONObject,
     key: SecretKey,
     field: String
-  ): String? = BackupCipher.decryptOrNull(raw.opt(field), key, BackupCipher.personFieldAad(person.id, field))
+  ): String? {
+    if (!raw.has(field) || raw.isNull(field)) return null
+    val v = raw.opt(field)
+    if (v !is String) {
+      throw IllegalArgumentException("Person ${person.id} field $field is not a string: $v")
+    }
+    if (v.isEmpty()) {
+      throw IllegalArgumentException("Person ${person.id} field $field is empty ciphertext")
+    }
+    return BackupCipher.decrypt(v, key, BackupCipher.personFieldAad(person.id, field))
+  }
 
   suspend fun parseBackupJson(jsonString: String): BackupPayload? = parser.parseBackupJson(jsonString)
 
