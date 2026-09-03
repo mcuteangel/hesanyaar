@@ -1,0 +1,33 @@
+app/src/main/java/io/github/mojri/hesabyar/rust/RustMappers.kt
+  s_59402ea6dda289::t_e61d87e182df62 382,385,397
+app/src/test/java/io/github/mojri/hesabyar/data/AppDatabaseMigrationTest.kt
+  s_59402ea6dda289::t_3e0814eb1b44df 648-701
+app/src/test/java/io/github/mojri/hesabyar/domain/utils/LoanEditCalculatorTest.kt
+  s_59402ea6dda289::t_fb016de01bc19e 1-66
+app/src/main/java/io/github/mojri/hesabyar/data/AppDatabase.kt
+  s_59402ea6dda289::t_009ee65edc5584 535-545
+  s_59402ea6dda289::t_ae9605ab751348 577-624
+app/src/test/java/io/github/mojri/hesabyar/rust/RustMappersTest.kt
+  s_59402ea6dda289::t_56388c4f2bdabc 303-429
+app/src/main/java/io/github/mojri/hesabyar/domain/usecase/ManageBackupUseCase.kt
+  s_59402ea6dda289::t_b5ec6b97ad8315 281-284,291-301
+  s_59402ea6dda289::t_f6365dccf7b6f1 254-258,265-275
+app/src/main/java/io/github/mojri/hesabyar/domain/usecase/BackupJsonParser.kt
+  s_59402ea6dda289::t_56fb8d525950d3 241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "60e9ab1fb19bda041709d91897f301a822f96397",
+  "prompts": {},
+  "sessions": {
+    "s_59402ea6dda289": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f9a0969cdffecLT2tgK7JR12IY",
+        "model": "unknown"
+      },
+      "human_author": "mcuteangel <mpcuteangel@Gmail.com>"
+    }
+  }
+}
