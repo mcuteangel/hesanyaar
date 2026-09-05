@@ -257,7 +257,6 @@
     <ID>TooManyFunctions:ExcelExporter.kt:ExcelExporter</ID>
     <ID>TooManyFunctions:CurrencyFormatter.kt:CurrencyFormatter</ID>
     <ID>TooManyFunctions:GeminiParser.kt:GeminiParser</ID>
-    <ID>TooManyFunctions:HesabyarRepository.kt:HesabyarRepository : HesabyarRepositoryInterfacePersonRepositoryInterface</ID>
     <ID>TooManyFunctions:HesabyarRepositoryInterface.kt:HesabyarRepositoryInterface</ID>
     <ID>TooManyFunctions:JalaliCalendarHelper.kt:JalaliCalendarHelper</ID>
     <ID>TooManyFunctions:ManageAiConfigUseCase.kt:ManageAiConfigUseCase</ID>

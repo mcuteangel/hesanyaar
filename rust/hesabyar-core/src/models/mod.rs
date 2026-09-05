@@ -998,4 +998,165 @@ mod tests {
         assert_eq!(tx.account_id, 1);
         assert!(tx.destination_account_id.is_none());
     }
+
+    #[test]
+    fn test_transaction_person_id_zero_sentinel_deserializes_to_none() {
+        let json = r#"{
+            "id": 1,
+            "type": "EXPENSE",
+            "categoryId": 1,
+            "amount": 1000,
+            "description": "x",
+            "date": 0,
+            "personId": 0
+        }"#;
+        let tx: Transaction = serde_json::from_str(json).unwrap();
+        assert_eq!(tx.person_id, None);
+    }
+
+    #[test]
+    fn test_loan_person_id_zero_sentinel_deserializes_to_none() {
+        let json = r#"{
+            "id": 1,
+            "personName": "Ali",
+            "type": "DEBTOR",
+            "originalAmount": 1000,
+            "remainingAmount": 500,
+            "description": "x",
+            "date": 0,
+            "isSettled": false,
+            "personId": 0
+        }"#;
+        let loan: Loan = serde_json::from_str(json).unwrap();
+        assert_eq!(loan.person_id, None);
+    }
+
+    #[test]
+    fn test_person_id_absent_deserializes_to_none() {
+        let tx_json = r#"{
+            "id": 1,
+            "type": "EXPENSE",
+            "categoryId": 1,
+            "amount": 1000,
+            "description": "x",
+            "date": 0
+        }"#;
+        let tx: Transaction = serde_json::from_str(tx_json).unwrap();
+        assert_eq!(tx.person_id, None);
+        let loan_json = r#"{
+            "id": 1,
+            "personName": "Ali",
+            "type": "DEBTOR",
+            "originalAmount": 1000,
+            "remainingAmount": 500,
+            "description": "x",
+            "date": 0,
+            "isSettled": false
+        }"#;
+        let loan: Loan = serde_json::from_str(loan_json).unwrap();
+        assert_eq!(loan.person_id, None);
+    }
+
+    #[test]
+    fn test_person_id_null_deserializes_to_none() {
+        let tx_json = r#"{
+            "id": 1,
+            "type": "EXPENSE",
+            "categoryId": 1,
+            "amount": 1000,
+            "description": "x",
+            "date": 0,
+            "personId": null
+        }"#;
+        let tx: Transaction = serde_json::from_str(tx_json).unwrap();
+        assert_eq!(tx.person_id, None);
+        let loan_json = r#"{
+            "id": 1,
+            "personName": "Ali",
+            "type": "DEBTOR",
+            "originalAmount": 1000,
+            "remainingAmount": 500,
+            "description": "x",
+            "date": 0,
+            "isSettled": false,
+            "personId": null
+        }"#;
+        let loan: Loan = serde_json::from_str(loan_json).unwrap();
+        assert_eq!(loan.person_id, None);
+    }
+
+    #[test]
+    fn test_person_id_valid_round_trip() {
+        let tx_json = r#"{
+            "id": 1,
+            "type": "EXPENSE",
+            "categoryId": 1,
+            "amount": 1000,
+            "description": "x",
+            "date": 0,
+            "personId": 42
+        }"#;
+        let tx: Transaction = serde_json::from_str(tx_json).unwrap();
+        assert_eq!(tx.person_id, Some(42));
+        let serialized = serde_json::to_string(&tx).unwrap();
+        let restored: Transaction = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(restored.person_id, Some(42));
+        let loan_json = r#"{
+            "id": 1,
+            "personName": "Ali",
+            "type": "DEBTOR",
+            "originalAmount": 1000,
+            "remainingAmount": 500,
+            "description": "x",
+            "date": 0,
+            "isSettled": false,
+            "personId": 42
+        }"#;
+        let loan: Loan = serde_json::from_str(loan_json).unwrap();
+        assert_eq!(loan.person_id, Some(42));
+        let serialized = serde_json::to_string(&loan).unwrap();
+        let restored: Loan = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(restored.person_id, Some(42));
+    }
+
+    #[test]
+    fn test_transaction_person_id_none_skips_serializing() {
+        let tx = Transaction {
+            id: 1,
+            tx_type: TransactionType::Expense,
+            category_id: 1,
+            amount: 1000,
+            description: "x".to_string(),
+            person_name: None,
+            person_id: None,
+            date: 0,
+            due_date: None,
+            installment_id: None,
+            account_id: 1,
+            destination_account_id: None,
+        };
+        let json = serde_json::to_string(&tx).unwrap();
+        assert!(!json.contains("personId"));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v.get("personId"), None);
+    }
+
+    #[test]
+    fn test_loan_person_id_some_serializes() {
+        let loan = Loan {
+            id: 1,
+            person_name: "Ali".to_string(),
+            person_id: Some(7),
+            loan_type: "DEBTOR".to_string(),
+            original_amount: 1000,
+            remaining_amount: 500,
+            description: "x".to_string(),
+            date: 0,
+            is_settled: false,
+        };
+        let json = serde_json::to_string(&loan).unwrap();
+        assert!(json.contains("\"personId\":7"));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v.get("personId").and_then(|v| v.as_i64()), Some(7));
+    }
 }
