@@ -48,7 +48,13 @@ internal class BackupDelegate(
       )
       backupReseedDefaultAccountIfNeeded(accountDao, backup.accounts.isEmpty())
       backup.categories.forEach { categoryDao.insertCategory(it) }
-      val personMaps = backupInsertPersonsForReplace(backup.persons, personDao)
+      val personsToInsert =
+        if (backup.persons.isEmpty()) {
+          recoverPersonsFromLoansAndTransactions(backup.loans, backup.transactions)
+        } else {
+          backup.persons
+        }
+      val personMaps = backupInsertPersonsForReplace(personsToInsert, personDao)
       backupInsertLoansWithPersonRemap(backup.loans, personMaps, loanDao)
       backupInsertTransactionsWithPersonRemap(backup.transactions, personMaps, transactionDao)
       backup.installments.forEach { installmentDao.insertInstallment(it) }

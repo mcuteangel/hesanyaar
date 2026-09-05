@@ -65,12 +65,9 @@ internal class PersonDelegate(
       require(key.isNotEmpty()) { "Person name normalizes to empty" }
       val clash = personDao.getPersonByNormalizedName(key)
       if (clash != null && clash.id != personId) return@withTransaction false
-      val oldName = person.name
       personDao.updatePerson(person.copy(name = display, normalizedName = key))
       loanDao.syncLoanPersonNames(personId, display)
-      loanDao.syncLoanPersonNamesForNullId(oldName, display)
       transactionDao.syncTransactionPersonNames(personId, display)
-      transactionDao.syncTransactionPersonNamesForNullId(oldName, display)
       true
     }
   }

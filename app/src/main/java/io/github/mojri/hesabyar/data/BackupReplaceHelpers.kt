@@ -28,6 +28,28 @@ internal suspend fun backupReseedDefaultAccountIfNeeded(
   if (isEmpty) accountDao.insert(AccountEntity.DEFAULT_ACCOUNT)
 }
 
+internal fun recoverPersonsFromLoansAndTransactions(
+  loans: List<Loan>,
+  transactions: List<Transaction>
+): List<Person> {
+  val distinct = LinkedHashMap<String, String>()
+  for (loan in loans) {
+    val raw = loan.personName
+    if (raw.isBlank()) continue
+    val display = PersonNameNormalizer.displayForm(raw)
+    val key = PersonNameNormalizer.normalize(display)
+    if (key.isNotEmpty()) distinct.putIfAbsent(key, display)
+  }
+  for (tx in transactions) {
+    val raw = tx.personName
+    if (raw == null || raw.isBlank()) continue
+    val display = PersonNameNormalizer.displayForm(raw)
+    val key = PersonNameNormalizer.normalize(display)
+    if (key.isNotEmpty()) distinct.putIfAbsent(key, display)
+  }
+  return distinct.map { (key, display) -> Person(name = display, normalizedName = key) }
+}
+
 internal suspend fun backupInsertPersonsForReplace(
   persons: List<Person>,
   personDao: PersonDao
@@ -56,11 +78,11 @@ internal suspend fun backupInsertOnePersonForReplace(
       if (key.isNotEmpty() && keyToLocalId.containsKey(key)) {
         AppLogger.w(
           "HesabyarRepository",
-          "insertOnePersonForReplace: skipping person '${raw.name}' — normalized key " +
-            "'$key' already exists (collision); its links keep personId NULL"
+          "insertOnePersonForReplace: person '${raw.name}' collides on normalized key " +
+            "'$key' — reusing existing person id ${keyToLocalId[key]}"
         )
       }
-      -1L
+      keyToLocalId[key] ?: -1L
     } else {
       val inserted = personDao.insertPerson(raw.copy(name = display, normalizedName = key, id = 0))
       if (inserted != -1L) inserted else personDao.getPersonByNormalizedName(key)?.id ?: -1L
