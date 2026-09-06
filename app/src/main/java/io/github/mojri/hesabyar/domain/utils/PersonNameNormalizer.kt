@@ -19,8 +19,9 @@ object PersonNameNormalizer {
   // Code points: ZWSP(200B), ZWNJ(200C), ZWJ(200D), word joiner(2060), BOM(FEFF).
   private val zeroWidthCodes = setOf(0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF)
 
-  // Arabic yeh/kaf/teh-marbuta fold to their Persian counterparts.
-  private val arabicToPersian = mapOf('ي' to 'ی', 'ك' to 'ک', 'ة' to 'ه')
+  // Arabic yeh/kaf/teh-marbuta fold to their Persian counterparts. Keyed by
+  // code point so lookups in [normalize] are safe for supplementary-plane chars.
+  private val arabicToPersian = mapOf('ي'.code to 'ی', 'ك'.code to 'ک', 'ة'.code to 'ه')
 
   /**
    * Collapses spelling variants to one dedup key: trims, collapses internal
@@ -35,13 +36,7 @@ object PersonNameNormalizer {
       var i = 0
       while (i < name.length) {
         val cp = name.codePointAt(i)
-        val foldedCp =
-          when (cp) {
-            'ي'.code -> 'ی'.code
-            'ك'.code -> 'ک'.code
-            'ة'.code -> 'ه'.code
-            else -> cp
-          }
+        val foldedCp = arabicToPersian[cp]?.code ?: cp
         when {
           foldedCp in zeroWidthCodes -> Unit
           Character.isWhitespace(foldedCp) -> pendingSpace = length > 0

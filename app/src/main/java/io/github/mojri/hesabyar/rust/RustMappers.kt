@@ -385,7 +385,7 @@ object RustMappers {
     require(normalizedName.isNotEmpty()) { "Person ${rust.id} normalizes to empty (name=\"${rust.name}\")" }
     return Person(
       id = rust.id,
-      name = rust.name,
+      name = display,
       normalizedName = normalizedName,
       phone = rust.phone,
       notes = rust.notes,

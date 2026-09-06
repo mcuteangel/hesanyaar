@@ -413,6 +413,87 @@ pub fn validate_accounts_and_references(payload: &BackupPayload) -> Vec<String> 
     errors
 }
 
+/// Validate person records and cross-reference loans/transactions against them.
+///
+/// Both `validate_backup_payload` (collect-all path) and `validate_backup`
+/// (fail-fast FFI path) call this so person validation cannot be skipped by
+/// either entry point. Field checks: blank name, blank derived key, duplicate
+/// derived key, duplicate source ID. Cross-reference checks: positive
+/// `person_id` on loans and transactions must point to a declared person.
+pub fn validate_persons(payload: &BackupPayload) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    // Field checks: blank name, blank derived key, duplicate derived key,
+    // and duplicate source IDs. The key is derived from `name` and never
+    // read from the backup-supplied `normalized_name` (mirrors the Kotlin
+    // fallback in BackupJsonValidator so both paths agree).
+    let mut seen_person_keys = std::collections::HashSet::new();
+    for (i, p) in payload.persons.iter().enumerate() {
+        // Mirror Kotlin `p.name.isBlank()` (Character.isWhitespace || isSpaceChar) —
+        // see `is_java_whitespace`. `str::trim` uses Unicode White_Space, which
+        // would diverge, so check every char explicitly.
+        let name_is_blank = p.name.is_empty()
+            || p.name.chars().all(|c| {
+                is_java_whitespace(c)
+                    || matches!(
+                        c,
+                        '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
+                    )
+            });
+        if name_is_blank {
+            errors.push(format!("Person[{}] has a blank name", i));
+        }
+        let key = normalize_person_name(&p.name);
+        if key.is_empty() {
+            errors.push(format!("Person[{}] has a blank normalizedName", i));
+        } else if !seen_person_keys.insert(key) {
+            errors.push(format!("Person[{}] has a duplicate normalizedName", i));
+        }
+    }
+    // Duplicate source IDs: the restore path maps source IDs to local rows with
+    // `associate`, so a later entry silently overwrites the earlier mapping and
+    // loans/transactions referencing that ID resolve to the wrong person.
+    let mut person_id_counts: std::collections::HashMap<i64, usize> =
+        std::collections::HashMap::new();
+    for p in payload.persons.iter() {
+        *person_id_counts.entry(p.id).or_insert(0) += 1;
+    }
+    let mut duplicate_person_ids: Vec<i64> = person_id_counts
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(id, _)| id)
+        .collect();
+    // Sort so the reported errors are deterministic across runs.
+    duplicate_person_ids.sort_unstable();
+    for id in duplicate_person_ids {
+        errors.push(format!("Person has a duplicate id {}", id));
+    }
+    // Cross-reference: positive person_id must point to a declared person.
+    // Zero is a legacy default tolerated in all cases.
+    let person_ids: std::collections::HashSet<_> = payload.persons.iter().map(|p| p.id).collect();
+    for (i, loan) in payload.loans.iter().enumerate() {
+        if let Some(pid) = loan.person_id {
+            if pid > 0 && !person_ids.contains(&pid) {
+                errors.push(format!(
+                    "Loan[{}] references non-existent person {}",
+                    i, pid
+                ));
+            }
+        }
+    }
+    for (i, tx) in payload.transactions.iter().enumerate() {
+        if let Some(pid) = tx.person_id {
+            if pid > 0 && !person_ids.contains(&pid) {
+                errors.push(format!(
+                    "Transaction[{}] references non-existent person {}",
+                    i, pid
+                ));
+            }
+        }
+    }
+    errors
+}
+
 /// Mirrors the Kotlin `PersonNameNormalizer` (app/…/domain/utils/PersonNameNormalizer.kt)
 /// for validation purposes only.
 ///
@@ -538,72 +619,9 @@ pub fn validate_backup_payload(payload: &BackupPayload) -> ValidationResult {
     errors.extend(validate_installment_batch(&payload.installments).errors);
     errors.extend(validate_bank_loan_batch(&payload.bank_loans).errors);
     errors.extend(validate_payment_history_batch(&payload.payment_histories).errors);
-    // Person validation: blank name, blank derived key, duplicate derived key and
-    // duplicate source ID are rejected. Mirrors the Kotlin fallback in
-    // BackupJsonValidator so both paths agree. The key is derived from `name` and
-    // never read from the backup-supplied `normalized_name`.
-    let mut seen_person_keys = std::collections::HashSet::new();
-    for (i, p) in payload.persons.iter().enumerate() {
-        // Mirror Kotlin `p.name.isBlank()` (Character.isWhitespace || isSpaceChar) — see `is_java_whitespace`.
-        // `str::trim` uses Unicode White_Space (includes U+0085, excludes NBSP handling divergence).
-        let name_is_blank = p.name.is_empty()
-            || p.name.chars().all(|c| {
-                is_java_whitespace(c)
-                    || matches!(
-                        c,
-                        '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}'
-                    )
-            });
-        if name_is_blank {
-            errors.push(format!("Person[{}] has a blank name", i));
-        }
-        let key = normalize_person_name(&p.name);
-        if key.is_empty() {
-            errors.push(format!("Person[{}] has a blank normalizedName", i));
-        } else if !seen_person_keys.insert(key) {
-            errors.push(format!("Person[{}] has a duplicate normalizedName", i));
-        }
-    }
-    // Duplicate source IDs: the restore path maps source IDs to local rows with
-    // `associate`, so a later entry silently overwrites the earlier mapping and
-    // loans/transactions referencing that ID resolve to the wrong person.
-    let mut person_id_counts: std::collections::HashMap<i64, usize> =
-        std::collections::HashMap::new();
-    for p in payload.persons.iter() {
-        *person_id_counts.entry(p.id).or_insert(0) += 1;
-    }
-    let mut duplicate_person_ids: Vec<i64> = person_id_counts
-        .into_iter()
-        .filter(|(_, count)| *count > 1)
-        .map(|(id, _)| id)
-        .collect();
-    // Sort so the reported errors are deterministic across runs.
-    duplicate_person_ids.sort_unstable();
-    for id in duplicate_person_ids {
-        errors.push(format!("Person has a duplicate id {}", id));
-    }
-    // Person reference validation: positive person_id must point to a declared person.
-    let person_ids: std::collections::HashSet<_> = payload.persons.iter().map(|p| p.id).collect();
-    for (i, loan) in payload.loans.iter().enumerate() {
-        if let Some(pid) = loan.person_id {
-            if pid > 0 && !person_ids.contains(&pid) {
-                errors.push(format!(
-                    "Loan[{}] references non-existent person {}",
-                    i, pid
-                ));
-            }
-        }
-    }
-    for (i, tx) in payload.transactions.iter().enumerate() {
-        if let Some(pid) = tx.person_id {
-            if pid > 0 && !person_ids.contains(&pid) {
-                errors.push(format!(
-                    "Transaction[{}] references non-existent person {}",
-                    i, pid
-                ));
-            }
-        }
-    }
+    // Person validation: field checks + cross-references. Single shared
+    // function so both FFI and internal paths enforce identical rules.
+    errors.extend(validate_persons(payload));
     // PaymentHistory cross-reference: positive loan_id must point to an existing loan.
     // Zero is a legacy default tolerated in all cases.
     let loan_ids: std::collections::HashSet<_> = payload.loans.iter().map(|l| l.id).collect();
@@ -2187,6 +2205,273 @@ mod tests {
             "a zero-width-only name must normalize to empty: {:?}",
             result.errors
         );
+    }
+
+    #[test]
+    fn test_validate_backup_person_reference_accepts_declared_person_on_loan() {
+        let payload = BackupPayload {
+            version: 1,
+            timestamp: 1710000000000,
+            app_version: "1.0".to_string(),
+            persons: vec![Person {
+                id: 1,
+                name: "Ali".into(),
+                normalized_name: "ali".into(),
+                ..person_default()
+            }],
+            loans: vec![Loan {
+                id: 1,
+                person_name: "Ali".into(),
+                person_id: Some(1),
+                loan_type: "DEBTOR".into(),
+                original_amount: 5_000_000,
+                remaining_amount: 3_000_000,
+                description: "test".into(),
+                date: 1710000000000,
+                is_settled: false,
+            }],
+            ..Default::default()
+        };
+        let result = validate_backup_payload(&payload);
+        assert!(
+            result.is_valid,
+            "declared person_id on loan must be accepted, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_backup_person_reference_accepts_declared_person_on_transaction() {
+        let payload = BackupPayload {
+            version: 1,
+            timestamp: 1710000000000,
+            app_version: "1.0".to_string(),
+            persons: vec![Person {
+                id: 1,
+                name: "Ali".into(),
+                normalized_name: "ali".into(),
+                ..person_default()
+            }],
+            transactions: vec![Transaction {
+                id: 1,
+                tx_type: TransactionType::Expense,
+                category_id: 1,
+                amount: 50_000,
+                description: "coffee".into(),
+                person_name: None,
+                person_id: Some(1),
+                date: 1710000000000,
+                due_date: None,
+                installment_id: None,
+                account_id: 1,
+                destination_account_id: None,
+            }],
+            ..Default::default()
+        };
+        let result = validate_backup_payload(&payload);
+        assert!(
+            result.is_valid,
+            "declared person_id on transaction must be accepted, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_backup_person_reference_rejects_orphan_loan_person_id() {
+        let payload = BackupPayload {
+            version: 1,
+            timestamp: 1710000000000,
+            app_version: "1.0".to_string(),
+            persons: vec![Person {
+                id: 1,
+                name: "Ali".into(),
+                normalized_name: "ali".into(),
+                ..person_default()
+            }],
+            loans: vec![Loan {
+                id: 1,
+                person_name: "Unknown".into(),
+                person_id: Some(99), // positive but not declared
+                loan_type: "DEBTOR".into(),
+                original_amount: 5_000_000,
+                remaining_amount: 3_000_000,
+                description: "test".into(),
+                date: 1710000000000,
+                is_settled: false,
+            }],
+            ..Default::default()
+        };
+        let result = validate_backup_payload(&payload);
+        assert!(!result.is_valid);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("non-existent person")),
+            "expected orphan person_id error on loan, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_backup_person_reference_rejects_orphan_transaction_person_id() {
+        let payload = BackupPayload {
+            version: 1,
+            timestamp: 1710000000000,
+            app_version: "1.0".to_string(),
+            persons: vec![Person {
+                id: 1,
+                name: "Ali".into(),
+                normalized_name: "ali".into(),
+                ..person_default()
+            }],
+            transactions: vec![Transaction {
+                id: 1,
+                tx_type: TransactionType::Expense,
+                category_id: 1,
+                amount: 50_000,
+                description: "coffee".into(),
+                person_name: None,
+                person_id: Some(99), // positive but not declared
+                date: 1710000000000,
+                due_date: None,
+                installment_id: None,
+                account_id: 1,
+                destination_account_id: None,
+            }],
+            ..Default::default()
+        };
+        let result = validate_backup_payload(&payload);
+        assert!(!result.is_valid);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("non-existent person")),
+            "expected orphan person_id error on transaction, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_backup_person_reference_tolerates_null_person_id() {
+        let payload = BackupPayload {
+            version: 1,
+            timestamp: 1710000000000,
+            app_version: "1.0".to_string(),
+            persons: vec![Person {
+                id: 1,
+                name: "Ali".into(),
+                normalized_name: "ali".into(),
+                ..person_default()
+            }],
+            loans: vec![Loan {
+                id: 1,
+                person_name: "Ali".into(),
+                person_id: None, // null is a legacy default, tolerated
+                loan_type: "DEBTOR".into(),
+                original_amount: 5_000_000,
+                remaining_amount: 3_000_000,
+                description: "test".into(),
+                date: 1710000000000,
+                is_settled: false,
+            }],
+            transactions: vec![Transaction {
+                id: 1,
+                tx_type: TransactionType::Expense,
+                category_id: 1,
+                amount: 50_000,
+                description: "coffee".into(),
+                person_name: None,
+                person_id: None, // null is a legacy default, tolerated
+                date: 1710000000000,
+                due_date: None,
+                installment_id: None,
+                account_id: 1,
+                destination_account_id: None,
+            }],
+            ..Default::default()
+        };
+        let result = validate_backup_payload(&payload);
+        assert!(
+            result.is_valid,
+            "null person_id must be tolerated, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_backup_validates_persons_in_fail_fast_ffi_path() {
+        // validate_backup (FFI path) must also reject a person with a blank name.
+        let payload = BackupPayload {
+            version: 1,
+            timestamp: 1710000000000,
+            app_version: "1.0".to_string(),
+            persons: vec![Person {
+                id: 1,
+                name: "".into(),
+                normalized_name: "ali".into(),
+                ..person_default()
+            }],
+            ..Default::default()
+        };
+        let err = crate::validate_backup(&payload).unwrap_err().to_string();
+        assert!(err.contains("blank name"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_validate_backup_fail_fast_rejects_orphan_person_reference() {
+        // validate_backup (FFI path) must also reject a loan referencing a
+        // non-existent positive person_id.
+        let payload = BackupPayload {
+            version: 1,
+            timestamp: 1710000000000,
+            app_version: "1.0".to_string(),
+            persons: vec![Person {
+                id: 1,
+                name: "Ali".into(),
+                normalized_name: "ali".into(),
+                ..person_default()
+            }],
+            loans: vec![Loan {
+                id: 1,
+                person_name: "Unknown".into(),
+                person_id: Some(99),
+                loan_type: "DEBTOR".into(),
+                original_amount: 5_000_000,
+                remaining_amount: 3_000_000,
+                description: "test".into(),
+                date: 1710000000000,
+                is_settled: false,
+            }],
+            ..Default::default()
+        };
+        let err = crate::validate_backup(&payload).unwrap_err().to_string();
+        assert!(err.contains("non-existent person"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_validate_backup_fail_fast_accepts_person_only_payload() {
+        // A backup with only well-formed persons must pass both the empty guard
+        // and the person validation in the FFI path.
+        let payload = BackupPayload {
+            version: 1,
+            timestamp: 1710000000000,
+            app_version: "1.0".to_string(),
+            persons: vec![Person {
+                id: 1,
+                name: "Ali".into(),
+                normalized_name: "ali".into(),
+                ..person_default()
+            }],
+            ..Default::default()
+        };
+        crate::validate_backup(&payload).unwrap_or_else(|e| {
+            panic!(
+                "person-only payload should be accepted by FFI path, got: {}",
+                e
+            )
+        });
     }
 
     fn person_default() -> Person {

@@ -251,6 +251,16 @@ pub fn validate_backup(payload: &BackupPayload) -> Result<(), HesabyarError> {
             });
         }
 
+        // Validate persons: field checks (blank name, duplicate key, duplicate id)
+        // and cross-references (positive person_id must point to a declared person).
+        // The same [validate_persons] function runs in validate_backup_payload, so
+        // malformed person-only payloads cannot slip through the FFI path.
+        if let Some(first_err) = crate::validation::validate_persons(payload).first() {
+            return Err(HesabyarError::BackupValidation {
+                detail: first_err.clone(),
+            });
+        }
+
         Ok(())
     })?;
     r

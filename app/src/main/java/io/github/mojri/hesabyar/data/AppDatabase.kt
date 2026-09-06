@@ -237,8 +237,30 @@ abstract class AppDatabase : RoomDatabase() {
           }
 
           val idByNormalized = HashMap<String, Long>()
+          preloadExistingPersons(db, idByNormalized)
           backfillPersonsFromLoans(db, idByNormalized)
           stampPersonIdsOnTransactions(db, idByNormalized)
+        }
+
+        /**
+         * Seeds [idByNormalized] from any persons already in the table. This
+         * covers the recovery path: when the `personId` columns already exist
+         * (duplicate-column guard caught), the persons table may already hold
+         * rows from a prior partial migration. Without this preload,
+         * [personIdFor] would re-insert existing normalized names and the
+         * unique index would abort the migration.
+         */
+        private fun preloadExistingPersons(
+          db: SupportSQLiteDatabase,
+          idByNormalized: MutableMap<String, Long>
+        ) {
+          db
+            .query("SELECT id, normalizedName FROM persons")
+            .use { cursor ->
+              while (cursor.moveToNext()) {
+                idByNormalized[cursor.getString(1)] = cursor.getLong(0)
+              }
+            }
         }
 
         /** Inserts (or reuses) a person row for [rawName]; returns its id or -1 for blank. */

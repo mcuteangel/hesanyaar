@@ -5,6 +5,7 @@
     <string name="cancel_label">انصراف</string>
     <string name="loan_type_debtor">من قرض دادم</string>
     <string name="loan_type_creditor">من قرض گرفتم</string>
+    <string name="loan_amount_too_large">مبلغ بیش از حد بزرگ است</string>
     <string name="currency_unit">تومان</string>
     <string name="category_type_expense">هزینه</string>
     <string name="category_type_income">درآمد</string>

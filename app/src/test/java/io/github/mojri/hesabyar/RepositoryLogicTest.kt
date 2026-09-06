@@ -408,7 +408,7 @@ class RepositoryLogicTest {
       val repo = createRepository()
       val loanId = seedLoanWithCategory(5_000L)
 
-      val success = repo.addPaymentToLoan(loanId, 10_000L, "overpayment test")
+      val success = repo.addPaymentToLoan(loanId, 10_000L, "overpayment test", null)
       assertFalse(success)
 
       val paymentHistories = database.paymentHistoryDao().getAllPaymentHistoriesBlocking()
@@ -427,7 +427,7 @@ class RepositoryLogicTest {
     runTest {
       val repo = createRepository()
       val loanId = seedLoanWithCategory(5_000L)
-      repo.addPaymentToLoan(loanId, 2_000L, "first installment")
+      repo.addPaymentToLoan(loanId, 2_000L, "first installment", null)
 
       val loan = requireNotNull(database.loanDao().getLoanById(loanId))
       repo.deleteLoan(loan)
@@ -540,7 +540,7 @@ class RepositoryLogicTest {
       val repo = createRepository()
       val loanId = seedLoanWithCategory(5_000L)
 
-      val success = repo.addPaymentToLoan(loanId, 0L, "zero payment")
+      val success = repo.addPaymentToLoan(loanId, 0L, "zero payment", null)
       assertFalse(success)
 
       val paymentHistories = database.paymentHistoryDao().getAllPaymentHistoriesBlocking()
@@ -560,7 +560,7 @@ class RepositoryLogicTest {
       val repo = createRepository()
       val loanId = seedLoanWithCategory(5_000L)
 
-      val success = repo.addPaymentToLoan(loanId, -1_000L, "negative payment")
+      val success = repo.addPaymentToLoan(loanId, -1_000L, "negative payment", null)
       assertFalse(success)
 
       val paymentHistories = database.paymentHistoryDao().getAllPaymentHistoriesBlocking()
@@ -580,7 +580,7 @@ class RepositoryLogicTest {
       val repo = createRepository()
       val loanId = seedLoanWithCategory(0L, isSettled = true)
 
-      val success = repo.addPaymentToLoan(loanId, 1_000L, "payment on settled loan")
+      val success = repo.addPaymentToLoan(loanId, 1_000L, "payment on settled loan", null)
       assertFalse(success)
 
       val paymentHistories = database.paymentHistoryDao().getAllPaymentHistoriesBlocking()

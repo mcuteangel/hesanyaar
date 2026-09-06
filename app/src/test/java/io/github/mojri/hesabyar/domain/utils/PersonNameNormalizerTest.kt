@@ -46,7 +46,7 @@ class PersonNameNormalizerTest {
   }
 
   @Test
-  fun displayFormStripsZeroWidthCharacters() {
+  fun displayFormPreservesZeroWidthCharacters() {
     // D4: display preserves ZWNJ/zero-width; only normalize strips them.
     // A zero-width-only input stays non-empty after trim but normalizes to empty.
     assertEquals("\u200B", PersonNameNormalizer.displayForm("\u200B"))

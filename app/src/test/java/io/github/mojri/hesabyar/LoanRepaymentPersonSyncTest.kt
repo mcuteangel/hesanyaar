@@ -81,7 +81,7 @@ class LoanRepaymentPersonSyncTest {
         )
 
       // Record a repayment. The repayment transaction must inherit the loan's personId.
-      assertTrue(repo.addPaymentToLoan(loanId, 2_000L, "first installment"))
+      assertTrue(repo.addPaymentToLoan(loanId, 2_000L, "first installment", null))
 
       val repaymentTx = database.transactionDao().getAllTransactionsBlocking().single()
       assertEquals(person.id, repaymentTx.personId)

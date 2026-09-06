@@ -9,7 +9,10 @@ import io.github.mojri.hesabyar.data.BankLoan
 import io.github.mojri.hesabyar.data.Category
 import io.github.mojri.hesabyar.data.CategoryType
 import io.github.mojri.hesabyar.data.DEFAULT_ACCOUNT_ID
+import io.github.mojri.hesabyar.data.Loan
+import io.github.mojri.hesabyar.data.LoanType
 import io.github.mojri.hesabyar.data.PaymentHistory
+import io.github.mojri.hesabyar.data.Person
 import io.github.mojri.hesabyar.data.Transaction
 import io.github.mojri.hesabyar.data.TransactionType
 import org.junit.Assert.assertTrue
@@ -488,5 +491,153 @@ class BackupJsonValidatorKotlinFallbackTest {
       "expected an invalid-account-reference error, got: $errors",
       errors.any { it == "<string-res-${R.string.backup_error_transaction_invalid_account}>" }
     )
+  }
+
+  // =====================================================================
+  // Person cross-reference validation (mirrors Rust validate_persons)
+  // =====================================================================
+
+  @Test
+  fun acceptsDeclaredPersonIdOnLoan() {
+    val payload =
+      BackupPayload(
+        persons =
+          listOf(Person(id = 1L, name = "Ali", normalizedName = "ali")),
+        loans =
+          listOf(
+            Loan(
+              personName = "Ali",
+              personId = 1L,
+              type = LoanType.DEBTOR,
+              originalAmount = 1_000L,
+              remainingAmount = 1_000L,
+              description = "test"
+            )
+          )
+      )
+
+    val result = validate(payload)
+    assertTrue("expected $result to be Valid for declared personId on loan", result is BackupValidationResult.Valid)
+  }
+
+  @Test
+  fun acceptsDeclaredPersonIdOnTransaction() {
+    val payload =
+      BackupPayload(
+        persons =
+          listOf(Person(id = 1L, name = "Ali", normalizedName = "ali")),
+        transactions =
+          listOf(
+            Transaction(
+              type = TransactionType.EXPENSE,
+              categoryId = 1L,
+              amount = 1_000L,
+              description = "t",
+              date = 1_700_000_000_000L,
+              personId = 1L
+            )
+          )
+      )
+
+    val result = validate(payload)
+    assertTrue(
+      "expected $result to be Valid for declared personId on transaction",
+      result is BackupValidationResult.Valid
+    )
+  }
+
+  @Test
+  fun rejectsUnresolvedPositivePersonIdOnLoan() {
+    val payload =
+      BackupPayload(
+        persons =
+          listOf(Person(id = 1L, name = "Ali", normalizedName = "ali")),
+        loans =
+          listOf(
+            Loan(
+              personName = "Unknown",
+              personId = 99L, // references a non-existent person
+              type = LoanType.DEBTOR,
+              originalAmount = 1_000L,
+              remainingAmount = 1_000L,
+              description = "test"
+            )
+          )
+      )
+
+    val result = validate(payload)
+    assertTrue(
+      "expected $result to be Invalid for unresolved personId on loan",
+      result is BackupValidationResult.Invalid
+    )
+    val errors = (result as BackupValidationResult.Invalid).errors
+    assertTrue(
+      "expected loan-invalid-person error, got: $errors",
+      errors.any { it == "<string-res-${R.string.backup_error_loan_invalid_person}>" }
+    )
+  }
+
+  @Test
+  fun rejectsUnresolvedPositivePersonIdOnTransaction() {
+    val payload =
+      BackupPayload(
+        persons =
+          listOf(Person(id = 1L, name = "Ali", normalizedName = "ali")),
+        transactions =
+          listOf(
+            Transaction(
+              type = TransactionType.EXPENSE,
+              categoryId = 1L,
+              amount = 1_000L,
+              description = "t",
+              date = 1_700_000_000_000L,
+              personId = 99L // references a non-existent person
+            )
+          )
+      )
+
+    val result = validate(payload)
+    assertTrue(
+      "expected $result to be Invalid for unresolved personId on transaction",
+      result is BackupValidationResult.Invalid
+    )
+    val errors = (result as BackupValidationResult.Invalid).errors
+    assertTrue(
+      "expected transaction-invalid-person error, got: $errors",
+      errors.any { it == "<string-res-${R.string.backup_error_transaction_invalid_person}>" }
+    )
+  }
+
+  @Test
+  fun toleratesNullPersonIdOnLoanAndTransaction() {
+    val payload =
+      BackupPayload(
+        persons = listOf(Person(id = 1L, name = "Ali", normalizedName = "ali")),
+        loans =
+          listOf(
+            Loan(
+              personName = "Ali",
+              personId = null, // null is a legacy default, tolerated
+              type = LoanType.DEBTOR,
+              originalAmount = 1_000L,
+              remainingAmount = 1_000L,
+              description = "test"
+            )
+          ),
+        transactions =
+          listOf(
+            Transaction(
+              type = TransactionType.EXPENSE,
+              categoryId = 1L,
+              amount = 1_000L,
+              description = "t",
+              date = 1_700_000_000_000L,
+              personId = null // null is a legacy default, tolerated
+            )
+          )
+      )
+
+    val result = validate(payload)
+    assertTrue("expected $result to be Valid for null personId", result is BackupValidationResult.Valid)
   }
 }

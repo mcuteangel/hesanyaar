@@ -230,4 +230,237 @@ class PersonRepositoryTest {
         type = CategoryType.BOTH
       )
     )
+
+  // =====================================================================
+  // insertPerson race: -1 means another concurrent insert won; the loser
+  // must look up the winner and merge contact details. Mirrors
+  // PersonDelegate.upsertPerson lines 40-51.
+  // =====================================================================
+
+  /** Race-simulating [PersonDao] that returns null on the first name lookup and -1 for insertPerson. */
+  private class RacePersonDao(
+    private val delegate: io.github.mojri.hesabyar.data.PersonDao
+  ) : io.github.mojri.hesabyar.data.PersonDao by delegate {
+    var forceLookupNullOnFirst = false
+    var forceInsertReturnNegative = false
+    private var lookupCount = 0
+
+    override suspend fun getPersonByNormalizedName(normalizedName: String): Person? {
+      if (forceLookupNullOnFirst && lookupCount == 0) {
+        lookupCount++
+        return null
+      }
+      return delegate.getPersonByNormalizedName(normalizedName)
+    }
+
+    override suspend fun insertPerson(person: Person): Long =
+      if (forceInsertReturnNegative) -1L else delegate.insertPerson(person)
+  }
+
+  @Test
+  fun upsertPersonMergesContactDetailsWhenInsertPersonReturnsNegativeOne() =
+    runTest {
+      // Pre-insert a winner so the unique index is occupied.
+      val realDao = database.personDao()
+      val winnerId =
+        realDao.insertPerson(
+          Person(
+            id = 0,
+            name = "علی",
+            normalizedName = "علی",
+            phone = "09120000000",
+            notes = "winner note",
+            createdAt = 1L,
+            isArchived = false
+          )
+        )
+      val raceDao =
+        RacePersonDao(realDao).apply {
+          forceLookupNullOnFirst = true
+          forceInsertReturnNegative = true
+        }
+      val delegate =
+        io.github.mojri.hesabyar.data.PersonDelegate(
+          raceDao,
+          database.loanDao(),
+          database.transactionDao(),
+          database
+        )
+
+      // Upsert the same name with new contact details — a race that loses
+      // the insert (insertPerson returns -1) must find the winner and merge.
+      val result =
+        delegate.upsertPerson(
+          Person(
+            name = "علی",
+            normalizedName = "علی",
+            phone = "09300000000",
+            notes = "new note",
+            createdAt = 2L,
+            isArchived = false
+          )
+        )
+
+      assertEquals("must return the winner's id", winnerId, result.id)
+      assertEquals("new phone must win over the winner's phone", "09300000000", result.phone)
+      assertEquals("new notes must win over the winner's notes", "new note", result.notes)
+
+      // Winner retained and merged in the DB
+      val stored = requireNotNull(database.personDao().getPersonById(winnerId))
+      assertEquals("09300000000", stored.phone)
+      assertEquals("new note", stored.notes)
+    }
+
+  @Test
+  fun upsertPersonReturnsWinnerUnchangedWhenContactDetailsAreAbsent() =
+    runTest {
+      val realDao = database.personDao()
+      val winnerId =
+        realDao.insertPerson(
+          Person(
+            id = 0,
+            name = "علی",
+            normalizedName = "علی",
+            phone = "09120000000",
+            notes = "winner note",
+            createdAt = 1L,
+            isArchived = false
+          )
+        )
+      val raceDao =
+        RacePersonDao(realDao).apply {
+          forceLookupNullOnFirst = true
+          forceInsertReturnNegative = true
+        }
+      val delegate =
+        io.github.mojri.hesabyar.data.PersonDelegate(
+          raceDao,
+          database.loanDao(),
+          database.transactionDao(),
+          database
+        )
+
+      // Upsert with no contact details — winner returned unchanged.
+      val result =
+        delegate.upsertPerson(
+          Person(
+            name = "علی",
+            normalizedName = "علی",
+            phone = null,
+            notes = null,
+            createdAt = 2L,
+            isArchived = false
+          )
+        )
+
+      assertEquals("must return the winner's id", winnerId, result.id)
+      assertEquals("winner phone preserved when input phone is null", "09120000000", result.phone)
+      assertEquals("winner notes preserved when input notes is null", "winner note", result.notes)
+    }
+
+  // =====================================================================
+  // Null-personId rename fallback (Daos.kt syncLoan/PersonNamesForNullId)
+  // =====================================================================
+
+  @Test
+  fun syncLoanPersonNamesForNullIdUpdatesMatchingLegacyLoansOnly() =
+    runTest {
+      val loanDao = database.loanDao()
+      // loan1: legacy (personId == null) with matching name
+      // loan2: legacy (personId == null) with a different name
+      // loan3: linked (personId != null) — must NOT be touched
+      val loan1Id =
+        loanDao.insertLoan(
+          Loan(
+            personName = "علی",
+            personId = null,
+            type = LoanType.DEBTOR,
+            originalAmount = 1000L,
+            remainingAmount = 1000L,
+            description = "legacy-match"
+          )
+        )
+      val loan2Id =
+        loanDao.insertLoan(
+          Loan(
+            personName = "رضا",
+            personId = null,
+            type = LoanType.DEBTOR,
+            originalAmount = 1000L,
+            remainingAmount = 1000L,
+            description = "legacy-unrelated"
+          )
+        )
+      val loan3Id =
+        loanDao.insertLoan(
+          Loan(
+            personName = "علی",
+            personId = 99L,
+            type = LoanType.DEBTOR,
+            originalAmount = 1000L,
+            remainingAmount = 1000L,
+            description = "linked"
+          )
+        )
+
+      loanDao.syncLoanPersonNamesForNullId(oldName = "علی", newName = "علی نیا")
+
+      val loan1 = requireNotNull(loanDao.getLoanById(loan1Id))
+      val loan2 = requireNotNull(loanDao.getLoanById(loan2Id))
+      val loan3 = requireNotNull(loanDao.getLoanById(loan3Id))
+      assertEquals("legacy loan with matching name updates", "علی نیا", loan1.personName)
+      assertEquals("legacy loan with different name unaffected", "رضا", loan2.personName)
+      assertEquals("linked loan (personId != null) unaffected", "علی", loan3.personName)
+    }
+
+  @Test
+  fun syncTransactionPersonNamesForNullIdUpdatesMatchingLegacyTransactionsOnly() =
+    runTest {
+      val txDao = database.transactionDao()
+      // tx1: legacy (personId == null) with matching name
+      // tx2: legacy (personId == null) with a different name
+      // tx3: linked (personId != null) — must NOT be touched
+      val tx1Id =
+        txDao.insertTransaction(
+          Transaction(
+            type = TransactionType.EXPENSE,
+            categoryId = 1L,
+            amount = 1000L,
+            description = "legacy-match",
+            personName = "علی",
+            personId = null
+          )
+        )
+      val tx2Id =
+        txDao.insertTransaction(
+          Transaction(
+            type = TransactionType.EXPENSE,
+            categoryId = 1L,
+            amount = 1000L,
+            description = "legacy-unrelated",
+            personName = "رضا",
+            personId = null
+          )
+        )
+      val tx3Id =
+        txDao.insertTransaction(
+          Transaction(
+            type = TransactionType.EXPENSE,
+            categoryId = 1L,
+            amount = 1000L,
+            description = "linked",
+            personName = "علی",
+            personId = 99L
+          )
+        )
+
+      txDao.syncTransactionPersonNamesForNullId(oldName = "علی", newName = "علی نیا")
+
+      val tx1 = requireNotNull(txDao.getAllTransactionsBlocking().find { it.id == tx1Id })
+      val tx2 = requireNotNull(txDao.getAllTransactionsBlocking().find { it.id == tx2Id })
+      val tx3 = requireNotNull(txDao.getAllTransactionsBlocking().find { it.id == tx3Id })
+      assertEquals("legacy tx with matching name updates", "علی نیا", tx1.personName)
+      assertEquals("legacy tx with different name unaffected", "رضا", tx2.personName)
+      assertEquals("linked tx (personId != null) unaffected", "علی", tx3.personName)
+    }
 }
