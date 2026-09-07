@@ -23,7 +23,7 @@ jobs:
         uses: ./.github/actions/setup-rust-android
 
       - name: Cache Cargo dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -34,7 +34,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Cache Gradle packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
