@@ -16,7 +16,7 @@ jobs:
     name: Run benchmarks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The CodSpeed JMH fork is vendored as a git submodule (with nested
           # submodules), so a recursive checkout is required.
