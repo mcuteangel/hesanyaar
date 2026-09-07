@@ -118,10 +118,9 @@ class ManageBackupUseCase(
         getEncryptionSalt(rootJson)
           ?: throw IllegalArgumentException("Backup does not contain encryption metadata")
       val key = BackupCipher.deriveKey(passphrase, salt, getEncryptionIterations(rootJson))
-      backup.copy(
-        accounts = decryptAccounts(backup, rootJson, key),
-        persons = decryptPersons(backup, rootJson, key)
-      )
+      val decryptedAccounts = decryptAccounts(backup, rootJson, key)
+      val decryptedPersons = decryptPersons(backup, rootJson, key)
+      backup.copy(accounts = decryptedAccounts, persons = decryptedPersons)
     }
 
   /**

@@ -618,4 +618,72 @@ class AppDatabaseMigration7to8Test {
       context.getDatabasePath("$dbName-shm").delete()
     }
   }
+
+  /**
+   * Regression: [AppDatabase.transferPlaintextData] inserts persons with
+   * `OnConflictStrategy.IGNORE`. When a source person collides on
+   * `normalizedName` with a row already present in the target, the source row
+   * is silently skipped while loans/transactions keep its original id — a
+   * dangling reference. The transfer must re-link those rows to the person id
+   * that actually exists in the target.
+   */
+  @Test
+  fun transferPlaintextDataRemapsPersonIdsOnNormalizedNameCollision() {
+    // Arrange: target already holds a person with key 'علی' (id auto-assigns to 1).
+    targetDb.personDao().insertAllBlocking(
+      listOf(Person(id = 0, name = "علی", normalizedName = "علی", createdAt = 1L))
+    )
+    val existingTargetPerson = targetDb.personDao().getAllPersonsIncludingArchivedBlocking().single()
+
+    // Source person 'علي' (Arabic yeh) normalizes to the same key but carries
+    // a different id (99) that is stamped on a loan and a transaction.
+    val collidingSourcePerson =
+      Person(id = 99L, name = "علي", normalizedName = "علی", createdAt = 2L)
+    val loan =
+      Loan(
+        id = 0,
+        personName = "علي",
+        personId = 99L,
+        type = LoanType.DEBTOR,
+        originalAmount = 100_000L,
+        remainingAmount = 100_000L,
+        description = "collision loan",
+        date = 100L
+      )
+    val transaction =
+      Transaction(
+        id = 0,
+        type = TransactionType.EXPENSE,
+        categoryId = 1L,
+        amount = 5_000L,
+        description = "collision tx",
+        personName = "علي",
+        personId = 99L,
+        date = 200L
+      )
+    sourceDb.personDao().insertAllBlocking(listOf(collidingSourcePerson))
+    sourceDb.loanDao().insertAllBlocking(listOf(loan))
+    sourceDb.transactionDao().insertAllBlocking(listOf(transaction))
+
+    // Act: invoke the real production transfer path.
+    AppDatabase.transferPlaintextData(sourceDb, targetDb)
+
+    // Assert: the colliding source row was skipped, not duplicated...
+    val persons = targetDb.personDao().getAllPersonsIncludingArchivedBlocking()
+    assertEquals("Collision must not create a second person", 1, persons.size)
+
+    // ...and no dangling personId survives: both rows re-link to the target person.
+    val migratedLoan = targetDb.loanDao().getAllLoansBlocking().single()
+    assertEquals(
+      "Loan personId remapped to the stored person",
+      existingTargetPerson.id,
+      migratedLoan.personId
+    )
+    val migratedTx = targetDb.transactionDao().getAllTransactionsBlocking().single()
+    assertEquals(
+      "Transaction personId remapped to the stored person",
+      existingTargetPerson.id,
+      migratedTx.personId
+    )
+  }
 }

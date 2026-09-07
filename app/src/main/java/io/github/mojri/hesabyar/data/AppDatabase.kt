@@ -603,6 +603,13 @@ abstract class AppDatabase : RoomDatabase() {
      * `internal` so [AppDatabaseMigrationTest] can invoke the real transfer
      * path with in-memory DBs (no sqlcipher/header checks) and verify that
      * archived persons and every other table survive the round-trip.
+     *
+     * Persons are inserted first. [PersonDao.insertAllBlocking] uses
+     * [OnConflictStrategy.IGNORE], so a `normalizedName` collision drops the
+     * source row while its original id is stamped on loans and transactions.
+     * The id remap below re-links those rows to the person id that actually
+     * exists in [encryptedDb] (resolved by normalized key), so no loan or
+     * transaction dangles after a collision.
      */
     internal fun transferPlaintextData(
       accounts: List<AccountEntity>,
@@ -616,16 +623,53 @@ abstract class AppDatabase : RoomDatabase() {
       encryptedDb: AppDatabase
     ) {
       encryptedDb.runInTransaction {
+        if (persons.isNotEmpty()) encryptedDb.personDao().insertAllBlocking(persons)
+        val personIdRemap = personIdRemapForTransfer(persons, encryptedDb)
         if (accounts.isNotEmpty()) encryptedDb.accountDao().insertAllBlocking(accounts)
         if (categories.isNotEmpty()) encryptedDb.categoryDao().insertAllBlocking(categories)
-        if (transactions.isNotEmpty()) encryptedDb.transactionDao().insertAllBlocking(transactions)
-        if (loans.isNotEmpty()) encryptedDb.loanDao().insertAllBlocking(loans)
+        if (transactions.isNotEmpty()) {
+          encryptedDb.transactionDao().insertAllBlocking(
+            transactions.map { it.copy(personId = remapPersonId(it.personId, personIdRemap)) }
+          )
+        }
+        if (loans.isNotEmpty()) {
+          encryptedDb.loanDao().insertAllBlocking(
+            loans.map { it.copy(personId = remapPersonId(it.personId, personIdRemap)) }
+          )
+        }
         if (bankLoans.isNotEmpty()) encryptedDb.bankLoanDao().insertAllBlocking(bankLoans)
         if (installments.isNotEmpty()) encryptedDb.installmentDao().insertAllBlocking(installments)
         if (payments.isNotEmpty()) encryptedDb.paymentHistoryDao().insertAllBlocking(payments)
-        if (persons.isNotEmpty()) encryptedDb.personDao().insertAllBlocking(persons)
       }
     }
+
+    /**
+     * Builds a source-person-id → stored-person-id map for a transfer. A
+     * mapping exists only when [PersonDao.insertAllBlocking] skipped the
+     * source row (normalized-key collision) and a different row carries that
+     * key in the target.
+     */
+    private fun personIdRemapForTransfer(
+      persons: List<Person>,
+      encryptedDb: AppDatabase
+    ): Map<Long, Long> {
+      if (persons.isEmpty()) return emptyMap()
+      val idByKey =
+        encryptedDb
+          .personDao()
+          .getAllPersonsIncludingArchivedBlocking()
+          .associateBy({ it.normalizedName }, { it.id })
+      return persons
+        .mapNotNull { source ->
+          val storedId = idByKey[source.normalizedName] ?: return@mapNotNull null
+          if (storedId != source.id) source.id to storedId else null
+        }.toMap()
+    }
+
+    private fun remapPersonId(
+      personId: Long?,
+      remap: Map<Long, Long>
+    ): Long? = personId?.let { remap[it] ?: it }
 
     /** In-memory variant that reads from [plaintextDb] and writes to [encryptedDb]. */
     internal fun transferPlaintextData(
