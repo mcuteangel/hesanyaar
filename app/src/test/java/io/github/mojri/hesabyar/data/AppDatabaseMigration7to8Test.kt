@@ -446,12 +446,18 @@ class AppDatabaseMigration7to8Test {
       try {
         db.openHelper.writableDatabase
         fail("Expected SQLiteException or IllegalStateException from missing loans table")
-      } catch (e: Exception) {
-        // Room wraps migration failures — accept SQLiteException from the
-        // guard or the IllegalStateException Room wraps it in.
+      } catch (e: SQLiteException) {
+        // Surface the underlying SQLite message in the test report so a
+        // regression in the migration's error path is visible.
+        assertTrue("Missing loans table must surface a SQLite error: ${e.message}", true)
+      } catch (e: IllegalStateException) {
+        // Room wraps migration failures in IllegalStateException while the
+        // underlying cause is a SQLiteException.
         assertTrue(
-          "Expected SQLite/illegal migration failure, got: ${e::class.simpleName}: ${e.message}",
-          e is SQLiteException || e is IllegalStateException
+          "Expected a migration failure, got: ${e.message}",
+          e.cause is SQLiteException ||
+            e.cause is IllegalStateException ||
+            e.message?.contains("SQLite", ignoreCase = true) == true
         )
       } finally {
         db.close()

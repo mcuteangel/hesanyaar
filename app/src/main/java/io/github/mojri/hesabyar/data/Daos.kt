@@ -29,6 +29,11 @@ interface CategoryDao {
   @Query("SELECT COUNT(*) FROM categories")
   suspend fun getCategoryCount(): Int
 
+  // REPLACE-restore mirror: the backup always carries the full category set,
+  // so stale local categories (custom or renamed) must not survive it.
+  @Query("DELETE FROM categories")
+  suspend fun deleteAllCategories()
+
   @Query("SELECT * FROM categories ORDER BY isDefault DESC, name ASC")
   fun getAllCategoriesBlocking(): List<Category>
 
@@ -76,6 +81,40 @@ interface TransactionDao {
     oldName: String,
     newName: String
   )
+
+  // Person deletion keeps the denormalized personName but drops the dangling
+  // id reference, so backups never export personId values without a person row.
+  @Query("UPDATE transactions SET personId = NULL WHERE personId = :personId")
+  suspend fun clearTransactionPersonIds(personId: Long)
+}
+
+/**
+ * Linkage cleanup operations for transactions whose existence is tied to a
+ * loan or installment. Split from [TransactionDao] to keep the main DAO
+ * under the detekt TooManyFunctions threshold.
+ */
+@Dao
+interface TransactionLinkDao {
+  // Deletes the expense/income transaction created by LoanDelegate
+  // .addPaymentToLoan for one payment (same person, Loans category, amount
+  // and date identify the generated row).
+  @Query(
+    "DELETE FROM transactions WHERE personName = :personName AND categoryId = :categoryId " +
+      "AND amount = :amount AND date = :date"
+  )
+  suspend fun deleteLoanPaymentTransaction(
+    personName: String,
+    categoryId: Long,
+    amount: Long,
+    date: Long
+  )
+
+  // Reversal link for the expense recorded when an installment was paid.
+  @Query("DELETE FROM transactions WHERE installmentId = :installmentId AND categoryId = :categoryId")
+  suspend fun deleteTransactionForInstallment(
+    installmentId: Long,
+    categoryId: Long
+  )
 }
 
 @Dao
@@ -118,6 +157,16 @@ interface LoanDao {
     oldName: String,
     newName: String
   )
+}
+
+/**
+ * Person-clearing side of loan updates. Split from [LoanDao] to keep the
+ * main DAO under the detekt TooManyFunctions threshold.
+ */
+@Dao
+interface LoanPersonOpsDao {
+  @Query("UPDATE loans SET personId = NULL WHERE personId = :personId")
+  suspend fun clearLoanPersonIds(personId: Long)
 }
 
 @Dao
@@ -187,6 +236,9 @@ interface InstallmentDao {
 interface PaymentHistoryDao {
   @Query("SELECT * FROM payment_history WHERE loanId = :loanId ORDER BY date DESC")
   fun getPaymentHistoryForLoan(loanId: Long): Flow<List<PaymentHistory>>
+
+  @Query("SELECT * FROM payment_history WHERE loanId = :loanId ORDER BY date DESC")
+  suspend fun getPaymentHistoriesForLoanSync(loanId: Long): List<PaymentHistory>
 
   @Query("DELETE FROM payment_history WHERE loanId = :loanId")
   suspend fun deletePaymentHistoryForLoan(loanId: Long)

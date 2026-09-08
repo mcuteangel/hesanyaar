@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
+import io.github.mojri.hesabyar.data.AppDatabase.Companion.transferPlaintextData
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -238,6 +239,169 @@ class AppDatabaseMigrationTest {
       // Assert: target also has no accounts (no crash)
       assertEquals("Target should have no accounts", 0, targetDb.accountDao().getAllAccountsBlocking().size)
     }
+
+  /**
+   * Regression test for the real plaintext→encrypted transfer path. Inserts
+   * rows into the plaintext DB, calls [AppDatabase.transferPlaintextData]
+   * (the production code path used by `migratePlaintextToEncryptedIfNeeded`),
+   * then verifies the encrypted DB receives archived persons and every other
+   * table. Person archived flag, phone, and notes must survive; a loan
+   * linked to the archived person must re-link to the stored id.
+   *
+   * Until this seam existed, the prior tests only simulated the read+insert
+   * by hand. A production regression in [AppDatabase.transferPlaintextData]
+   * could pass while tests stayed green.
+   */
+  @Test
+  fun archivedPersonsAndLinkedLoansSurviveTransferPlaintextData() =
+    runTest {
+      // Arrange + Act
+      val archivedIdInTarget = seedSourceAndTransfer()
+      assertArchivedPersonsPreserved(archivedIdInTarget)
+      assertLoanReLinkedToArchivedPerson()
+    }
+
+/**
+ * * Seeds sourceDb with one account, one active and one archived person, and
+ * * a transaction/loan linked by personId. Invokes the real
+ * * [AppDatabase.transferPlaintextData] production path. Returns the auto-
+ * * generated id assigned to the archived person in the target DB.
+ * */
+  private suspend fun seedSourceAndTransfer(): Long {
+    seedAccountAndPersons()
+    insertLinkedTransactionAndLoan()
+    transferPlaintextData(sourceDb, targetDb)
+    return targetDb
+      .personDao()
+      .getAllPersonsIncludingArchivedBlocking()
+      .first { it.name == "Reza" }
+      .id
+  }
+
+  private suspend fun seedAccountAndPersons() {
+    sourceDb.accountDao().insertAllBlocking(
+      listOf(
+        AccountEntity(
+          id = 1,
+          name = "حساب اصلی",
+          type = AccountType.BANK,
+          createdAt = 1000L,
+          updatedAt = 2000L,
+        )
+      )
+    )
+    sourceDb.personDao().insertAllBlocking(
+      listOf(
+        Person(
+          id = 0L,
+          name = "Sara",
+          normalizedName = "sara",
+          phone = "09120000000",
+          notes = "active",
+          createdAt = 1000L,
+          isArchived = false
+        ),
+        Person(
+          id = 0L,
+          name = "Reza",
+          normalizedName = "reza",
+          phone = "09121111111",
+          notes = "old customer",
+          createdAt = 2000L,
+          isArchived = true
+        )
+      )
+    )
+    val sourcePersons =
+      sourceDb.personDao().getAllPersonsIncludingArchivedBlocking()
+    assertEquals("source must have 2 persons (active + archived)", 2, sourcePersons.size)
+  }
+
+  /** Inserts one transaction linked to Sara and one loan linked to Reza. Returns their source ids. */
+  private fun insertLinkedTransactionAndLoan(): Pair<Long, Long> {
+    val activeId =
+      sourceDb
+        .personDao()
+        .getAllPersonsIncludingArchivedBlocking()
+        .first { it.name == "Sara" }
+        .id
+    val archivedId =
+      sourceDb
+        .personDao()
+        .getAllPersonsIncludingArchivedBlocking()
+        .first { it.name == "Reza" }
+        .id
+    sourceDb.transactionDao().insertAllBlocking(
+      listOf(
+        Transaction(
+          id = 1L,
+          type = TransactionType.EXPENSE,
+          categoryId = 1L,
+          amount = 100_000L,
+          description = "loan",
+          date = 1000L,
+          accountId = 1L,
+          personId = activeId
+        )
+      )
+    )
+    sourceDb.loanDao().insertAllBlocking(
+      listOf(
+        Loan(
+          id = 2L,
+          personName = "Reza",
+          personId = archivedId,
+          type = LoanType.DEBTOR,
+          originalAmount = 500_000L,
+          remainingAmount = 250_000L,
+          description = "old loan",
+          date = 2000L
+        )
+      )
+    )
+    return activeId to archivedId
+  }
+
+  /**
+   * Asserts the active and archived persons both reached targetDb with their
+   * flags, phones, notes, and timestamps intact.
+   */
+  private fun assertArchivedPersonsPreserved(expectedArchivedId: Long) {
+    val targetPersons =
+      targetDb.personDao().getAllPersonsIncludingArchivedBlocking()
+    assertEquals("target must have 2 persons after real transfer", 2, targetPersons.size)
+    val archivedInTarget = targetPersons.first { it.name == "Reza" }
+    assertEquals("archived person id stable", expectedArchivedId, archivedInTarget.id)
+    assertEquals("archived flag preserved", true, archivedInTarget.isArchived)
+    assertEquals("archived person phone preserved", "09121111111", archivedInTarget.phone)
+    assertEquals("archived person notes preserved", "old customer", archivedInTarget.notes)
+    assertEquals("archived person createdAt preserved", 2000L, archivedInTarget.createdAt)
+
+    val activeInTarget = targetPersons.first { it.name == "Sara" }
+    assertEquals("active flag preserved", false, activeInTarget.isArchived)
+    assertEquals("active person phone preserved", "09120000000", activeInTarget.phone)
+  }
+
+  /**
+   * Asserts the loan originally linked by source-person-id was re-linked to
+   * the auto-generated target id of the archived person (no dangling foreign
+   * key after the real transfer).
+   */
+  private fun assertLoanReLinkedToArchivedPerson() {
+    val targetLoans = targetDb.loanDao().getAllLoansBlocking()
+    assertEquals("target must have 1 loan after real transfer", 1, targetLoans.size)
+    val archivedInTarget =
+      targetDb
+        .personDao()
+        .getAllPersonsIncludingArchivedBlocking()
+        .first { it.name == "Reza" }
+    assertEquals(
+      "loan personId re-linked to archived person id",
+      archivedInTarget.id,
+      targetLoans[0].personId
+    )
+    assertEquals("loan personName preserved", "Reza", targetLoans[0].personName)
+  }
 
   /**
    * Creates a v5 database schema using raw SQL, runs MIGRATION_5_6 and

@@ -7,6 +7,7 @@ internal class LoanDelegate(
   private val loanDao: LoanDao,
   private val paymentHistoryDao: PaymentHistoryDao,
   private val transactionDao: TransactionDao,
+  private val transactionLinkDao: TransactionLinkDao,
   private val categoryDao: CategoryDao,
   private val database: AppDatabase
 ) : LoanOps {
@@ -20,6 +21,24 @@ internal class LoanDelegate(
 
   override suspend fun deleteLoan(loan: Loan) {
     database.withTransaction {
+      // Payments made through addPaymentToLoan each created a standalone
+      // expense/income Transaction. Delete them together with the payment
+      // history, or reports keep counting money for a loan that no longer
+      // exists. Each generated row is identified by the same fields the
+      // creator used: personName, Loans category, amount and date.
+      val loansCategoryId = categoryDao.getCategoryByKey("Loans")?.id
+      if (loansCategoryId != null) {
+        paymentHistoryDao
+          .getPaymentHistoriesForLoanSync(loan.id)
+          .forEach { payment ->
+            transactionLinkDao.deleteLoanPaymentTransaction(
+              personName = loan.personName,
+              categoryId = loansCategoryId,
+              amount = payment.amount,
+              date = payment.date
+            )
+          }
+      }
       paymentHistoryDao.deletePaymentHistoryForLoan(loan.id)
       loanDao.deleteLoan(loan)
     }
@@ -38,7 +57,10 @@ internal class LoanDelegate(
     return database.withTransaction {
       val loan = loanDao.getLoanById(loanId) ?: return@withTransaction false
       val loansCategory = categoryDao.getCategoryByKey("Loans") ?: return@withTransaction false
-      if (loan.remainingAmount <= 0L) return@withTransaction false
+      // A settled loan must never accept further repayment: a positive
+      // remainingAmount on a settled row is stale data, and paying it would
+      // resurrect the loan by flipping isSettled back to false.
+      if (loan.isSettled || loan.remainingAmount <= 0L) return@withTransaction false
       if (amount > loan.remainingAmount) return@withTransaction false
       val newRemaining = loan.remainingAmount - amount
       val isSettled = newRemaining == 0L

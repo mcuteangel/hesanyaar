@@ -194,7 +194,7 @@ class PersonRepositoryTest {
     }
 
   @Test
-  fun deletePersonRemovesRowButKeepsDenormalizedNames() =
+  fun deletePersonRemovesRowAndClearsPersonIdButKeepsDenormalizedNames() =
     runTest {
       val repo = createRepository()
       val person = repo.upsertPerson(person("علی"))
@@ -213,11 +213,9 @@ class PersonRepositoryTest {
       repo.deletePerson(person.copy(id = person.id))
 
       assertNull(database.personDao().getPersonById(person.id))
-      assertEquals(
-        "Display name survives on the loan row (D3)",
-        "علی",
-        database.loanDao().getLoanById(loanId)?.personName
-      )
+      val storedLoan = database.loanDao().getLoanById(loanId)
+      assertEquals("Display name survives on the loan row (D3)", "علی", storedLoan?.personName)
+      assertNull("Dangling personId must be cleared", storedLoan?.personId)
     }
 
   private suspend fun seedCategoryId(repo: HesabyarRepository): Long =
@@ -283,6 +281,7 @@ class PersonRepositoryTest {
         io.github.mojri.hesabyar.data.PersonDelegate(
           raceDao,
           database.loanDao(),
+          database.loanPersonOpsDao(),
           database.transactionDao(),
           database
         )
@@ -336,6 +335,7 @@ class PersonRepositoryTest {
         io.github.mojri.hesabyar.data.PersonDelegate(
           raceDao,
           database.loanDao(),
+          database.loanPersonOpsDao(),
           database.transactionDao(),
           database
         )

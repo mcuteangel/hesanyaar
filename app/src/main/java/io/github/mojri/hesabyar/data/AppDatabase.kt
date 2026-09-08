@@ -36,7 +36,11 @@ import java.io.IOException
 abstract class AppDatabase : RoomDatabase() {
   abstract fun transactionDao(): TransactionDao
 
+  abstract fun transactionLinkDao(): TransactionLinkDao
+
   abstract fun loanDao(): LoanDao
+
+  abstract fun loanPersonOpsDao(): LoanPersonOpsDao
 
   abstract fun installmentDao(): InstallmentDao
 

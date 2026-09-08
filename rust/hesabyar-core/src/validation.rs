@@ -521,11 +521,32 @@ fn normalize_person_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut pending_space = false;
     for raw in name.chars() {
-        // Fold Arabic variants to their Persian counterparts.
+        // Lam-alef presentation-form ligatures (FEF5-FEFC) fold to the two-char
+        // canonical lam + alef sequence, mirroring the Kotlin map exactly.
+        match raw {
+            '\u{FEF5}' | '\u{FEF6}' | '\u{FEF7}' | '\u{FEF8}' | '\u{FEF9}' | '\u{FEFA}'
+            | '\u{FEFB}' | '\u{FEFC}' => {
+                if pending_space && !out.is_empty() {
+                    out.push(' ');
+                }
+                pending_space = false;
+                out.push_str("\u{0644}\u{0627}");
+                continue;
+            }
+            _ => {}
+        }
+        // Single-character Arabic-script fold to the Persian counterpart.
         let folded = match raw {
-            '\u{064A}' => '\u{06CC}', // Arabic yeh -> Persian yeh
-            '\u{0643}' => '\u{06A9}', // Arabic kaf -> Persian keheh
-            '\u{0629}' => '\u{0647}', // Arabic teh marbuta -> heh
+            // yeh variants -> Persian yeh
+            '\u{064A}' | '\u{0649}' | '\u{0626}' => '\u{06CC}',
+            // kaf -> Persian keheh
+            '\u{0643}' => '\u{06A9}',
+            // teh marbuta -> heh
+            '\u{0629}' => '\u{0647}',
+            // alef variants -> plain alef
+            '\u{0623}' | '\u{0625}' | '\u{0622}' | '\u{0671}' => '\u{0627}',
+            // waw with hamza -> waw
+            '\u{0624}' => '\u{0648}',
             other => other,
         };
         match folded {
@@ -545,9 +566,8 @@ fn normalize_person_name(name: &str) -> String {
                 // point, otherwise the original char is kept unchanged.
                 // Rust `char::to_lowercase()` is the FULL mapping and can yield
                 // several code points; for `İ` (U+0130) it yields "i\u{307}"
-                // while Kotlin's simple mapping yields a single `i`. The general
-                // `count() == 1` guard below would wrongly keep `İ`, so map it
-                // explicitly to stay in parity with the Kotlin util.
+                // while Kotlin's simple mapping yields a single `i`, so it is
+                // mapped explicitly to stay in parity.
                 if c == '\u{0130}' {
                     out.push('i');
                 } else {
@@ -566,9 +586,12 @@ fn normalize_person_name(name: &str) -> String {
 
 /// Mirrors Kotlin `Char.isWhitespace` on JVM (`Character.isWhitespace`), which the
 /// Kotlin normalizer delegates to. Java/Kotlin `isWhitespace` EXCLUDES NBSP variants
-/// (`U+00A0`, `U+2007`, `U+202F`) and NEL `U+0085`; Rust `char::is_whitespace` (Unicode
-/// White_Space) includes them, so they are excluded here to keep Rust validation
-/// and Kotlin runtime dedup keys in parity (see test_normalize_person_name_matches_kotlin_contract).
+/// (`U+00A0`, `U+2007`, `U+202F`) but INCLUDES NEL `U+0085`; Rust `char::is_whitespace`
+/// (Unicode White_Space) treats NBSP variants the same way Kotlin does but disagrees
+/// only on NBSP-family characters that Rust also flags as whitespace. The NBSP variants
+/// are excluded here so Rust validation matches Kotlin's runtime dedup keys (see
+/// test_normalize_person_name_matches_kotlin_contract). NEL is left in `is_whitespace`
+/// so a name containing NEL is normalized identically on both sides.
 fn is_java_whitespace(c: char) -> bool {
     matches!(
         c,
@@ -581,11 +604,7 @@ fn is_java_whitespace(c: char) -> bool {
             | '\u{001D}'
             | '\u{001E}'
             | '\u{001F}'
-    ) || (c.is_whitespace()
-        && c != '\u{00A0}'
-        && c != '\u{2007}'
-        && c != '\u{202F}'
-        && c != '\u{0085}')
+    ) || (c.is_whitespace() && c != '\u{00A0}' && c != '\u{2007}' && c != '\u{202F}')
 }
 
 /// Validate an entire backup payload. Collects all errors from all entities.
@@ -2171,6 +2190,15 @@ mod tests {
         // NNBSP and NARROW NBSP are likewise preserved, not folded.
         assert_eq!(normalize_person_name("a\u{2007}b"), "a\u{2007}b");
         assert_eq!(normalize_person_name("a\u{202F}b"), "a\u{202F}b");
+
+        // NEL (`U+0085`) parity: Java `Character.isWhitespace` INCLUDES NEL,
+        // so Kotlin's normalizer folds NEL into a separator (collapses adjacent
+        // runs to a single space). Rust `char::is_whitespace` also includes it,
+        // so the parity point is the Java semantics, not an exception. If a
+        // future change drops NEL from the exception list's siblings by
+        // mistake, this assertion will fail.
+        assert_eq!(normalize_person_name("a\u{0085}b"), "a b");
+        assert_eq!(normalize_person_name("a\u{0085}\u{0085}b"), "a b");
 
         // Case-fold parity: Kotlin `Char.lowercaseChar()` (Java
         // `Character.toLowerCase`) applies the Unicode SIMPLE lowercase. For

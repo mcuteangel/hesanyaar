@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 internal class PersonDelegate(
   private val personDao: PersonDao,
   private val loanDao: LoanDao,
+  private val loanPersonOpsDao: LoanPersonOpsDao,
   private val transactionDao: TransactionDao,
   private val database: AppDatabase
 ) : PersonRepositoryInterface {
@@ -17,41 +18,42 @@ internal class PersonDelegate(
 
   override suspend fun getPersonById(id: Long): Person? = personDao.getPersonById(id)
 
-  override suspend fun upsertPerson(person: Person): Person {
-    val display = PersonNameNormalizer.displayForm(person.name)
-    require(display.isNotEmpty()) { "Person name is blank" }
-    val key = PersonNameNormalizer.normalize(display)
-    require(key.isNotEmpty()) { "Person name normalizes to empty" }
-    val existing = personDao.getPersonByNormalizedName(key)
-    val result =
-      if (existing != null) {
-        val merged = existing.copy(phone = person.phone ?: existing.phone, notes = person.notes ?: existing.notes)
-        personDao.updatePerson(merged)
-        merged
-      } else {
-        val candidate =
-          person.copy(
-            id = 0,
-            name = display,
-            normalizedName = key,
-            createdAt = person.createdAt.takeIf { it != 0L } ?: System.currentTimeMillis()
-          )
-        val id = personDao.insertPerson(candidate)
-        if (id != -1L) {
-          candidate.copy(id = id)
+  override suspend fun upsertPerson(person: Person): Person =
+    database.withTransaction {
+      val display = PersonNameNormalizer.displayForm(person.name)
+      require(display.isNotEmpty()) { "Person name is blank" }
+      val key = PersonNameNormalizer.normalize(display)
+      require(key.isNotEmpty()) { "Person name normalizes to empty" }
+      val existing = personDao.getPersonByNormalizedName(key)
+      val result =
+        if (existing != null) {
+          val merged = existing.copy(phone = person.phone ?: existing.phone, notes = person.notes ?: existing.notes)
+          personDao.updatePerson(merged)
+          merged
         } else {
-          val winner = requireNotNull(personDao.getPersonByNormalizedName(key))
-          if (person.phone != null || person.notes != null) {
-            val mergedWinner = winner.copy(phone = person.phone ?: winner.phone, notes = person.notes ?: winner.notes)
-            if (mergedWinner != winner) personDao.updatePerson(mergedWinner)
-            mergedWinner
+          val candidate =
+            person.copy(
+              id = 0,
+              name = display,
+              normalizedName = key,
+              createdAt = person.createdAt.takeIf { it != 0L } ?: System.currentTimeMillis()
+            )
+          val id = personDao.insertPerson(candidate)
+          if (id != -1L) {
+            candidate.copy(id = id)
           } else {
-            winner
+            val winner = requireNotNull(personDao.getPersonByNormalizedName(key))
+            if (person.phone != null || person.notes != null) {
+              val mergedWinner = winner.copy(phone = person.phone ?: winner.phone, notes = person.notes ?: winner.notes)
+              if (mergedWinner != winner) personDao.updatePerson(mergedWinner)
+              mergedWinner
+            } else {
+              winner
+            }
           }
         }
-      }
-    return result
-  }
+      result
+    }
 
   override suspend fun renamePerson(
     personId: Long,
@@ -68,11 +70,23 @@ internal class PersonDelegate(
       personDao.updatePerson(person.copy(name = display, normalizedName = key))
       loanDao.syncLoanPersonNames(personId, display)
       transactionDao.syncTransactionPersonNames(personId, display)
+      // Legacy rows predate the personId column backfill and keep a NULL id
+      // with only the denormalized name. Sync them with the OLD name so a
+      // rename does not leave stale names behind.
+      loanDao.syncLoanPersonNamesForNullId(person.name, display)
+      transactionDao.syncTransactionPersonNamesForNullId(person.name, display)
       true
     }
   }
 
   override suspend fun deletePerson(person: Person) {
-    database.withTransaction { personDao.deletePerson(person) }
+    database.withTransaction {
+      // Drop the id references but keep the denormalized personName, so
+      // history stays readable and backups never export a personId without
+      // a matching persons row (the validator rejects those payloads).
+      loanPersonOpsDao.clearLoanPersonIds(person.id)
+      transactionDao.clearTransactionPersonIds(person.id)
+      personDao.deletePerson(person)
+    }
   }
 }

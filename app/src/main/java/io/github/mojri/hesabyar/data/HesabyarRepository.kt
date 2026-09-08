@@ -19,12 +19,31 @@ class HesabyarRepository(
   personDao: PersonDao,
   database: AppDatabase
 ) : HesabyarRepositoryInterface,
-  PersonRepositoryInterface by PersonDelegate(personDao, loanDao, transactionDao, database),
+  PersonRepositoryInterface by PersonDelegate(
+    personDao,
+    loanDao,
+    database.loanPersonOpsDao(),
+    transactionDao,
+    database
+  ),
   AccountOps by AccountDelegate(accountDao, database),
   TransactionOps by TransactionDelegate(transactionDao),
   CategoryOps by CategoryDelegate(categoryDao, database),
-  LoanOps by LoanDelegate(loanDao, paymentHistoryDao, transactionDao, categoryDao, database),
-  InstallmentOps by InstallmentDelegate(installmentDao, transactionDao, categoryDao, database),
+  LoanOps by LoanDelegate(
+    loanDao,
+    paymentHistoryDao,
+    transactionDao,
+    database.transactionLinkDao(),
+    categoryDao,
+    database
+  ),
+  InstallmentOps by InstallmentDelegate(
+    installmentDao,
+    transactionDao,
+    database.transactionLinkDao(),
+    categoryDao,
+    database
+  ),
   BankLoanOps by BankLoanDelegate(bankLoanDao, installmentDao, database),
   BackupOps by BackupDelegate(
     transactionDao,
