@@ -11,7 +11,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -398,6 +397,13 @@ class AppDatabaseMigration7to8Test {
    * Unrelated SQLite errors (anything other than "duplicate column") must
    * propagate, not be swallowed by the recovery guard. Room wraps migration
    * failures in IllegalStateException, so we catch at that level.
+   *
+   * Isolation: the migration body must stay fully runnable, otherwise this
+   * test would pass even without the guard (any later statement would also
+   * throw against a broken schema). So instead of dropping a whole table, a
+   * decorator makes ONLY `ALTER TABLE ... ADD COLUMN personId` throw a
+   * non-duplicate SQLiteException; the migration then succeeds iff the guard
+   * rethrows, and every other statement proves it works on a healthy schema.
    */
   @Test
   fun migration7to8RethrowsUnrelatedSqliteErrors() {
@@ -406,9 +412,6 @@ class AppDatabaseMigration7to8Test {
     val dbFile = context.getDatabasePath(dbName)
 
     try {
-      // Create a v7 database WITHOUT a loans table — ALTER TABLE loans will
-      // fail with "no such table", which is NOT a "duplicate column" error
-      // and must be rethrown by the recovery guard.
       val helper =
         FrameworkSQLiteOpenHelperFactory().create(
           androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration
@@ -418,8 +421,6 @@ class AppDatabaseMigration7to8Test {
               object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(7) {
                 override fun onCreate(db: SupportSQLiteDatabase) {
                   createV7SchemaTables(db)
-                  // Drop loans to force a non-duplicate-column SQLite error.
-                  db.execSQL("DROP TABLE IF EXISTS loans")
                   createV5SchemaRoomMetadata(db)
                 }
 
@@ -431,37 +432,34 @@ class AppDatabaseMigration7to8Test {
               }
             ).build()
         )
-      helper.writableDatabase.close()
-      helper.close()
+      val rawDb = helper.writableDatabase
+      // Fail only the personId ALTERs with a "no such table" SQLiteException —
+      // NOT a duplicate-column error, so the recovery guard must rethrow it.
+      val decorated =
+        object : SupportSQLiteDatabase by rawDb {
+          override fun execSQL(sql: String) {
+            if (sql.contains("ADD COLUMN personId", ignoreCase = true)) {
+              throw SQLiteException("no such table: loans (injected)")
+            }
+            rawDb.execSQL(sql)
+          }
+        }
 
-      val db =
-        Room
-          .databaseBuilder(context, AppDatabase::class.java, dbName)
-          .allowMainThreadQueries()
-          .addMigrations(AppDatabase.MIGRATION_7_8)
-          .build()
+      val threw =
+        try {
+          AppDatabase.MIGRATION_7_8.migrate(decorated)
+          false
+        } catch (expected: SQLiteException) {
+          true
+        } finally {
+          rawDb.close()
+          helper.close()
+        }
 
-      // Opening the database triggers the migration; the missing loans table
-      // must cause a failure rather than silently proceeding.
-      try {
-        db.openHelper.writableDatabase
-        fail("Expected SQLiteException or IllegalStateException from missing loans table")
-      } catch (e: SQLiteException) {
-        // Surface the underlying SQLite message in the test report so a
-        // regression in the migration's error path is visible.
-        assertTrue("Missing loans table must surface a SQLite error: ${e.message}", true)
-      } catch (e: IllegalStateException) {
-        // Room wraps migration failures in IllegalStateException while the
-        // underlying cause is a SQLiteException.
-        assertTrue(
-          "Expected a migration failure, got: ${e.message}",
-          e.cause is SQLiteException ||
-            e.cause is IllegalStateException ||
-            e.message?.contains("SQLite", ignoreCase = true) == true
-        )
-      } finally {
-        db.close()
-      }
+      assertTrue(
+        "Guard must rethrow non-duplicate SQLite errors, not swallow them",
+        threw
+      )
     } finally {
       dbFile.delete()
       context.getDatabasePath("$dbName-wal").delete()

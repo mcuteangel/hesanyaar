@@ -12,6 +12,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import io.github.mojri.hesabyar.HesabyarApp
 import io.github.mojri.hesabyar.R
+import io.github.mojri.hesabyar.RustIsolationRule
 import io.github.mojri.hesabyar.data.Loan
 import io.github.mojri.hesabyar.data.LoanType
 import io.github.mojri.hesabyar.ui.CurrencyFormatter
@@ -39,6 +40,9 @@ class LoanManagementDialogTest {
   @get:Rule
   val composeRule = createComposeRule()
 
+  @get:Rule
+  val rustIsolationRule = RustIsolationRule()
+
   private val context = ApplicationProvider.getApplicationContext<Context>()
   private val maxTomanDisplay = Long.MAX_VALUE / 10L
   private val tooLargeAmount = (maxTomanDisplay + 1).toString()
@@ -46,6 +50,8 @@ class LoanManagementDialogTest {
   @Before
   fun setUp() {
     // Force the Kotlin fallback path so tests don't depend on the native lib.
+    // RustIsolationRule saves and restores the process-global override around
+    // the class, so this cannot leak into later test classes.
     HesabyarApp.setRustInitializedForTesting(false)
     CurrencyFormatter.setUnit(CurrencyUnit.TOMAN)
   }
@@ -59,17 +65,12 @@ class LoanManagementDialogTest {
   @Test
   fun addLoanDialogShowsOverflowErrorAndDoesNotConfirm() {
     val confirmed = mutableStateOf(false)
+    val shownMessage = mutableStateOf<String?>(null)
 
     composeRule.setContent {
       AddLoanDialog(
         initialType = LoanType.DEBTOR,
-        showMessage = { msg ->
-          assertEquals(
-            "expected overflow error message",
-            context.getString(R.string.loan_amount_too_large),
-            msg
-          )
-        },
+        showMessage = { msg -> shownMessage.value = msg },
         onConfirm = { _, _, _, _, _ -> confirmed.value = true },
         onDismiss = {}
       )
@@ -81,7 +82,15 @@ class LoanManagementDialogTest {
     composeRule.onNode(hasText("مبلغ قرض (تومان)").and(hasSetTextAction())).performTextInput(tooLargeAmount)
     composeRule.onNodeWithText("ثبت و ذخیره").performClick()
 
-    composeRule.waitUntil(timeoutMillis = 5_000) { !confirmed.value }
+    // The overflow message must actually be shown before asserting the
+    // callback stayed uncalled — a validation error that never invokes either
+    // callback would otherwise pass the test for the wrong reason.
+    composeRule.waitUntil(timeoutMillis = 5_000) { shownMessage.value != null }
+    assertEquals(
+      "overflow error message must be shown",
+      context.getString(R.string.loan_amount_too_large),
+      shownMessage.value
+    )
     assertFalse("onConfirm must not be called for overflow", confirmed.value)
   }
 
@@ -115,6 +124,7 @@ class LoanManagementDialogTest {
   @Test
   fun editLoanDialogShowsOverflowErrorAndDoesNotUpdate() {
     val updated = mutableStateOf(false)
+    val shownMessage = mutableStateOf<String?>(null)
 
     val originalLoan =
       Loan(
@@ -133,13 +143,7 @@ class LoanManagementDialogTest {
       EditLoanDialog(
         loan = originalLoan,
         onUpdate = { updated.value = true },
-        showMessage = { msg ->
-          assertEquals(
-            "expected overflow error message",
-            context.getString(R.string.loan_amount_too_large),
-            msg
-          )
-        },
+        showMessage = { msg -> shownMessage.value = msg },
         onDismiss = {}
       )
     }
@@ -150,7 +154,15 @@ class LoanManagementDialogTest {
     composeRule.onNode(hasText("مبلغ قرض (تومان)").and(hasSetTextAction())).performTextInput(tooLargeAmount)
     composeRule.onNodeWithText("ذخیره تغییرات").performClick()
 
-    composeRule.waitUntil(timeoutMillis = 5_000) { !updated.value }
+    // The overflow message must actually be shown before we assert that the
+    // update stayed uncalled — otherwise a never-invoked callback passes the
+    // assertion for the wrong reason.
+    composeRule.waitUntil(timeoutMillis = 5_000) { shownMessage.value != null }
+    assertEquals(
+      "overflow error message must be shown",
+      context.getString(R.string.loan_amount_too_large),
+      shownMessage.value
+    )
     assertFalse("onUpdate must not be called for overflow", updated.value)
   }
 

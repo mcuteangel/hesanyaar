@@ -285,23 +285,6 @@ class RepositoryLogicTest {
   }
 
   @Test
-  fun updateinstallmentPaidCreatesExpenseTransaction() {
-    val installment =
-      Installment(title = "Car", amount = 2_000_000L, dueDate = System.currentTimeMillis(), isPaid = true)
-    assertTrue(installment.isPaid)
-
-    val transaction =
-      Transaction(
-        type = TransactionType.EXPENSE,
-        categoryId = 5L,
-        amount = installment.amount,
-        description = "پرداخت قسط: ${installment.title} - ${installment.notes}"
-      )
-    assertEquals(TransactionType.EXPENSE, transaction.type)
-    assertEquals(2_000_000L, transaction.amount)
-  }
-
-  @Test
   fun loanPaymentCreatesCorrectTransactionTypeMapping() {
     val scenarios =
       mapOf(

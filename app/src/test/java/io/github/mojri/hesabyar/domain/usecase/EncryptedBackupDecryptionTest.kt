@@ -193,4 +193,88 @@ class EncryptedBackupDecryptionTest {
     assertEquals("absent phone must stay null", null, decrypted.persons[0].phone)
     assertEquals("notes must still be recovered", "یادداشت", decrypted.persons[0].notes)
   }
+
+  @Test
+  fun decryptAccountFieldRejectsEmptyAndNonStringCiphertext() {
+    val repo = FakeRepository()
+    val useCase = ManageBackupUseCase(repo)
+    val passphrase = "correct-passphrase"
+
+    runBlocking {
+      repo.insertAccount(
+        AccountEntity(
+          id = 1,
+          name = "حساب اصلی",
+          type = AccountType.BANK,
+          cardNumber = "6219861012345678",
+          iban = "IR12345"
+        )
+      )
+    }
+
+    val rootJson = runBlocking { useCase.exportBackupJson(passphrase = passphrase) }
+    val jsonString = rootJson.toString()
+    val parsed = runBlocking { useCase.parseBackupJson(jsonString) }!!
+
+    // Empty ciphertext: present but blank fails loudly rather than decrypting
+    // to nothing and silently clearing the field.
+    val emptyRoot = JSONObject(jsonString)
+    emptyRoot.getJSONArray("accounts").getJSONObject(0).put("cardNumber", "")
+    assertThrows(
+      "Empty ciphertext must fail loudly",
+      IllegalArgumentException::class.java
+    ) {
+      runBlocking { useCase.decryptBackupWithPassphrase(parsed, emptyRoot, passphrase) }
+    }
+
+    // Non-string value: a number in place of the base64 ciphertext is
+    // malformed data, not a decryptable field.
+    val nonStringRoot = JSONObject(jsonString)
+    nonStringRoot.getJSONArray("accounts").getJSONObject(0).put("iban", 5)
+    assertThrows(
+      "Non-string ciphertext must fail loudly",
+      IllegalArgumentException::class.java
+    ) {
+      runBlocking { useCase.decryptBackupWithPassphrase(parsed, nonStringRoot, passphrase) }
+    }
+  }
+
+  @Test
+  fun decryptPersonFieldRejectsEmptyAndNonStringCiphertext() {
+    val repo = FakeRepository()
+    val useCase = ManageBackupUseCase(repo)
+    val passphrase = "correct-passphrase"
+
+    repo.addPerson(
+      Person(
+        id = 1L,
+        name = "Ali",
+        normalizedName = "ali",
+        phone = "09121234567",
+        notes = "یادداشت"
+      )
+    )
+
+    val rootJson = runBlocking { useCase.exportBackupJson(passphrase = passphrase) }
+    val jsonString = rootJson.toString()
+    val parsed = runBlocking { useCase.parseBackupJson(jsonString) }!!
+
+    val emptyRoot = JSONObject(jsonString)
+    emptyRoot.getJSONArray("persons").getJSONObject(0).put("notes", "")
+    assertThrows(
+      "Empty ciphertext must fail loudly",
+      IllegalArgumentException::class.java
+    ) {
+      runBlocking { useCase.decryptBackupWithPassphrase(parsed, emptyRoot, passphrase) }
+    }
+
+    val nonStringRoot = JSONObject(jsonString)
+    nonStringRoot.getJSONArray("persons").getJSONObject(0).put("phone", 123)
+    assertThrows(
+      "Non-string ciphertext must fail loudly",
+      IllegalArgumentException::class.java
+    ) {
+      runBlocking { useCase.decryptBackupWithPassphrase(parsed, nonStringRoot, passphrase) }
+    }
+  }
 }
