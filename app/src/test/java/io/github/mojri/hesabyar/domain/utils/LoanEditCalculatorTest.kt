@@ -57,7 +57,7 @@ class LoanEditCalculatorTest {
   }
 
   @Test
-  fun recomputeWithZeroRemainingKeepsNewRemainingZero() {
+  fun recomputeZeroRemainingReopensLoanByNewPrincipal() {
     val l = loan(original = 1_000_000L, remaining = 0L) // fully repaid
     val result = LoanEditCalculator.recompute(l, 1_500_000L)
     assertEquals(500_000L, result.remainingAmount)

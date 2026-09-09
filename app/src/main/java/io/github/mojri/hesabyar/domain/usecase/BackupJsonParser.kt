@@ -235,13 +235,16 @@ class BackupJsonParser(
         // normalizedName="reza") would bind Ali's records to Reza's identity and
         // survive the round-trip because the restore path also derives the key
         // from name. The persons table UNIQUE index on normalizedName plus
-        // PersonDao.IGNORE silently drops an empty key, so skip unnormalizable names.
+        // PersonDao.IGNORE silently drops an empty key, so rows whose name
+        // normalizes to empty are skipped (defense in depth, mirrors the
+        // malformed-item skip above) and the trimmed display form is stored
+        // so the Rust parser and this fallback agree on the persisted name.
         val display = PersonNameNormalizer.displayForm(rawName)
         val key = PersonNameNormalizer.normalize(display)
-        require(key.isNotEmpty()) { "Person id=${o.optLong("id", 0L)} normalizes to empty (name=\"${rawName}\")" }
+        if (key.isEmpty()) return@mapNotNull null
         Person(
           id = o.optLong("id", 0L),
-          name = rawName,
+          name = display,
           normalizedName = key,
           phone = o.nullableString("phone"),
           notes = o.nullableString("notes"),

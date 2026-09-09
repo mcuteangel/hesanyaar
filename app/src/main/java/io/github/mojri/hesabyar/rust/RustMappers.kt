@@ -382,7 +382,9 @@ object RustMappers {
   fun fromRustPerson(rust: io.github.mojri.hesabyar.rust.Person): Person {
     val display = PersonNameNormalizer.displayForm(rust.name)
     val normalizedName = PersonNameNormalizer.normalize(display)
-    require(normalizedName.isNotEmpty()) { "Person ${rust.id} normalizes to empty (name=\"${rust.name}\")" }
+    // Keep the person id but never echo the raw name into the exception: it
+    // can carry PII and reaches logs through BackupJsonParser error handling.
+    require(normalizedName.isNotEmpty()) { "Person ${rust.id} normalizes to empty" }
     return Person(
       id = rust.id,
       name = display,

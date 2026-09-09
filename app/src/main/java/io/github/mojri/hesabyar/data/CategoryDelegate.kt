@@ -19,6 +19,18 @@ internal class CategoryDelegate(
   override suspend fun insertCategory(category: Category): Long = categoryDao.insertCategory(category)
 
   override suspend fun updateCategory(category: Category) {
+    // The persisted isDefault flag is authoritative. Letting an update flip
+    // it would let a caller bypass the delete guard below (update the default
+    // row to isDefault=false, then delete it).
+    val persisted = categoryDao.getCategoryById(category.id)
+    if (persisted != null && persisted.isDefault != category.isDefault) {
+      AppLogger.w(
+        "HesabyarRepository",
+        "updateCategory: refusing isDefault change for id=${category.id} " +
+          "(persisted=${persisted.isDefault}, requested=${category.isDefault})"
+      )
+      return
+    }
     categoryDao.updateCategory(category)
   }
 

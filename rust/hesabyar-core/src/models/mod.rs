@@ -1000,6 +1000,28 @@ mod tests {
     }
 
     #[test]
+    fn test_loan_person_id_none_omits_field_and_roundtrips() {
+        let loan = Loan {
+            id: 7,
+            person_name: "Ali".to_string(),
+            person_id: None,
+            loan_type: "DEBTOR".to_string(),
+            original_amount: 5000000,
+            remaining_amount: 3000000,
+            description: "test".to_string(),
+            date: 1710000000000,
+            is_settled: false,
+        };
+        let json = serde_json::to_string(&loan).unwrap();
+        // The None id must be omitted entirely, never serialized as a sentinel
+        // or null, so backups cannot regress on the person link.
+        assert!(!json.contains("personId"));
+        let restored: Loan = serde_json::from_str(&json).unwrap();
+        assert!(restored.person_id.is_none());
+        assert_eq!(restored.person_name, "Ali");
+    }
+
+    #[test]
     fn test_transaction_person_id_zero_sentinel_deserializes_to_none() {
         let json = r#"{
             "id": 1,

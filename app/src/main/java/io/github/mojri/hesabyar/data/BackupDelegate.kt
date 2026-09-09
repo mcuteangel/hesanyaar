@@ -47,6 +47,10 @@ internal class BackupDelegate(
         personDao
       )
       backupReseedDefaultAccountIfNeeded(accountDao, backup.accounts.isEmpty())
+      // The backup always carries the full category set, so clear local
+      // categories first: REPLACE must mirror the backup exactly and not keep
+      // stale custom or renamed categories behind.
+      categoryDao.deleteAllCategories()
       backup.categories.forEach { categoryDao.insertCategory(it) }
       val personsToInsert =
         if (backup.persons.isEmpty()) {
@@ -66,13 +70,35 @@ internal class BackupDelegate(
   override suspend fun mergeFromBackup(backup: BackupPayload) =
     database.withTransaction {
       val categoryIdMap = backupMergeCategories(backup.categories, categoryDao)
-      val personKeyToId = backupMergePersons(backup.persons, personDao)
+      // Legacy backups predate the persons array; recover identities from the
+      // loan/transaction names so the merge path links them like replace does.
+      val personsToMerge =
+        if (backup.persons.isEmpty()) {
+          recoverPersonsFromLoansAndTransactions(backup.loans, backup.transactions)
+        } else {
+          backup.persons
+        }
+      val personKeyToId = backupMergePersons(personsToMerge, personDao)
+      // Map every referenced source person id — not only the rows carried in
+      // backup.persons — so loans/transactions pointing at an id present in
+      // the persons list always resolve. Referenced ids with no person entry
+      // map to an empty key and fall back to name resolution.
+      val sourceIdToKey =
+        personsToMerge.associate {
+          it.id to PersonNameNormalizer.normalize(PersonNameNormalizer.displayForm(it.name))
+        } +
+          (
+            backup.loans.mapNotNull { it.personId } +
+              backup.transactions.mapNotNull { it.personId }
+          ).associateWith { id ->
+            personsToMerge
+              .firstOrNull { p -> p.id == id }
+              ?.let { p -> PersonNameNormalizer.normalize(PersonNameNormalizer.displayForm(p.name)) }
+              .orEmpty()
+          }
       val personMaps =
         PersonKeyMaps(
-          sourceIdToKey =
-            backup.persons.associate {
-              it.id to PersonNameNormalizer.normalize(PersonNameNormalizer.displayForm(it.name))
-            },
+          sourceIdToKey = sourceIdToKey,
           keyToLocalId = personKeyToId
         )
 

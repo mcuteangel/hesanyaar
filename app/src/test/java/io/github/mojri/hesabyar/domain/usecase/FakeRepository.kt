@@ -340,6 +340,6 @@ internal class FakeRepository : HesabyarRepositoryInterface {
 
   override suspend fun deletePerson(person: Person) {
     personsList.removeIf { it.id == person.id }
-    _allPersons.value = personsList.toList()
+    publishPersons()
   }
 }

@@ -42,6 +42,9 @@ import java.util.*
 
 private const val TOMAN_TO_RIAL_FACTOR = 10L
 
+/** Parses a display-amount string to the numeric amount; null for non-numeric input. */
+internal fun numericAmount(text: String): Long? = text.toLongOrNull()
+
 @Composable
 private fun LoanTypeSelector(
   loanType: LoanType,
@@ -691,6 +694,11 @@ internal fun submitLoanEdit(
   showMessage: (String) -> Unit,
   tooLargeMessage: String
 ) {
+  // Compare the parsed numeric amounts, never raw strings: the input field
+  // may group digits or trim differently than the snapshot, and relying on
+  // exact string equality would wrongly fall through to recompute and
+  // truncate odd Rials in TOMAN mode.
+  val initialAmountNumeric = numericAmount(initialAmountText)
   val maxTomanDisplay = Long.MAX_VALUE / TOMAN_TO_RIAL_FACTOR
   val amountDisplay = form.amountText.toLongOrNull() ?: 0L
   when {
@@ -703,7 +711,7 @@ internal fun submitLoanEdit(
 
     // Display-unit round trips truncate odd Rials in Toman mode; when the
     // amount field was left untouched, keep the stored amounts as-is.
-    form.amountText == initialAmountText ->
+    numericAmount(form.amountText) == initialAmountNumeric ->
       onUpdate(
         loan.copy(
           personName = form.personName,

@@ -262,11 +262,11 @@ class AppDatabaseMigrationTest {
     }
 
 /**
- * * Seeds sourceDb with one account, one active and one archived person, and
- * * a transaction/loan linked by personId. Invokes the real
- * * [AppDatabase.transferPlaintextData] production path. Returns the auto-
- * * generated id assigned to the archived person in the target DB.
- * */
+   * * Seeds sourceDb with one account, one active and one archived person, and
+   * * a transaction/loan linked by personId. Invokes the real
+   * * [AppDatabase.transferPlaintextData] production path. Returns the auto-
+   * * generated id assigned to the archived person in the target DB.
+   * */
   private suspend fun seedSourceAndTransfer(): Long {
     seedAccountAndPersons()
     insertLinkedTransactionAndLoan()
