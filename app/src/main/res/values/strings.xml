@@ -5,6 +5,7 @@
     <string name="cancel_label">انصراف</string>
     <string name="loan_type_debtor">من قرض دادم</string>
     <string name="loan_type_creditor">من قرض گرفتم</string>
+    <string name="loan_amount_too_large">مبلغ بیش از حد بزرگ است</string>
     <string name="currency_unit">تومان</string>
     <string name="category_type_expense">هزینه</string>
     <string name="category_type_income">درآمد</string>
@@ -101,6 +102,10 @@
     <string name="backup_validation_bankloan_repayable_below_received">مبلغ کل بازپرداخت وام #%1$d نباید کمتر از مبلغ دریافتی باشد</string>
     <string name="backup_validation_bankloan_interest_mismatch">سود وام #%1$d با مبلغ کل بازپرداخت منهای مبلغ دریافتی برابر نیست</string>
     <string name="backup_validation_account_name_blank">نام حساب #%1$d خالی است</string>
+    <string name="backup_validation_person_name_blank">نام شخص #%1$d خالی است</string>
+    <string name="backup_validation_person_normalized_blank">نام یکتای شخص #%1$d خالی است</string>
+    <string name="backup_validation_person_duplicate">نام یکتای شخص #%1$d تکراری است</string>
+    <string name="backup_validation_person_duplicate_id">شناسه شخص %1$s تکراری است</string>
 
     <!-- BackupReferenceValidator (cross-reference validation errors) -->
     <string name="backup_error_duplicate_account_id">حساب تکراری با شناسه %1$s</string>
@@ -112,6 +117,8 @@
     <string name="backup_error_transfer_same_source_destination">تراکنش انتقالی #%1$d مبدا و مقصد یکسان دارند</string>
     <string name="backup_error_transaction_invalid_category">تراکنش #%1$d به دسته‌بندی ناموجود %2$s ارجاع می‌دهد</string>
     <string name="backup_error_payment_invalid_loan">پرداخت #%1$d به وام ناموجود %2$s ارجاع می‌دهد</string>
+    <string name="backup_error_loan_invalid_person">وام #%1$d به شخص ناموجود %2$s ارجاع می‌دهد</string>
+    <string name="backup_error_transaction_invalid_person">تراکنش #%1$d به شخص ناموجود %2$s ارجاع می‌دهد</string>
 
     <!-- AccountManagementScreen delete dialogs -->
     <string name="account_delete_title">حذف حساب</string>

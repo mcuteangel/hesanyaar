@@ -14,8 +14,10 @@ import io.github.mojri.hesabyar.data.Installment
 import io.github.mojri.hesabyar.data.Loan
 import io.github.mojri.hesabyar.data.LoanType
 import io.github.mojri.hesabyar.data.PaymentHistory
+import io.github.mojri.hesabyar.data.Person
 import io.github.mojri.hesabyar.data.Transaction
 import io.github.mojri.hesabyar.data.TransactionType
+import io.github.mojri.hesabyar.domain.utils.PersonNameNormalizer
 import io.github.mojri.hesabyar.rust.RustBridge
 import io.github.mojri.hesabyar.rust.RustMappers
 import kotlinx.coroutines.CoroutineDispatcher
@@ -50,6 +52,7 @@ class BackupJsonParser(
             categories = rustResult.categories.map { RustMappers.fromRustCategory(it) },
             bankLoans = rustResult.bankLoans.map { RustMappers.fromRustBankLoan(it) },
             accounts = rustResult.accounts.map { RustMappers.fromRustAccount(it) },
+            persons = RustMappers.fromRustPersons(rustResult.persons),
             settings = parseSettings(rootJson)
           )
         } catch (e: IllegalArgumentException) {
@@ -78,6 +81,7 @@ class BackupJsonParser(
         categories = parseCategories(root),
         bankLoans = parseBankLoansFromJson(root),
         accounts = parseAccountsFromJson(root),
+        persons = parsePersons(root),
         settings = parseSettings(root)
       )
     } catch (e: NumberFormatException) {
@@ -108,6 +112,8 @@ class BackupJsonParser(
           amount = o.optLong("amount", 0L),
           description = o.optString("description", ""),
           personName = o.optString("personName", "").ifBlank { null },
+          personId =
+            if (o.has("personId") && !o.isNull("personId")) o.optLong("personId").takeIf { it != 0L } else null,
           date = o.optLong("date", 0L),
           dueDate = o.optLong("dueDate", 0L).takeIf { it != 0L },
           installmentId = o.optLong("installmentId", 0L).takeIf { it != 0L },
@@ -130,6 +136,8 @@ class BackupJsonParser(
         Loan(
           id = o.optLong("id", 0L),
           personName = o.optString("personName", ""),
+          personId =
+            if (o.has("personId") && !o.isNull("personId")) o.optLong("personId").takeIf { it != 0L } else null,
           type = type,
           originalAmount = o.optLong("originalAmount", 0L),
           remainingAmount = o.optLong("remainingAmount", 0L),
@@ -205,6 +213,43 @@ class BackupJsonParser(
           startDate = o.optLong("startDate", 0L),
           description = o.optString("description", ""),
           isSettled = o.optBoolean("isSettled", false)
+        )
+      }
+    } ?: emptyList()
+
+  private fun parsePersons(root: JSONObject): List<Person> =
+    root.optJSONArray("persons")?.let { arr ->
+      (0 until arr.length()).mapNotNull { i ->
+        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        // Recompute normalizedName when the backup omits it or carries an
+        // empty/stale value. The persons table has a UNIQUE NOT NULL index on
+        // normalizedName (AppDatabase.kt:221-225, Entities.kt:91-98) and
+        // PersonDao.insertPerson uses OnConflictStrategy.IGNORE — a blank
+        // normalizedName would collapse every malformed person onto the same
+        // unique key and be silently dropped. Mirrors the runtime invariant
+        // (HesabyarRepository.upsertPerson requires a non-empty key); rows
+        // whose name also normalizes to empty are skipped (defense in depth).
+        val rawName = o.optString("name", "")
+        // Always derive the dedup key from the canonical name form. Never trust a
+        // supplied normalizedName: a mismatched value (name="Ali",
+        // normalizedName="reza") would bind Ali's records to Reza's identity and
+        // survive the round-trip because the restore path also derives the key
+        // from name. The persons table UNIQUE index on normalizedName plus
+        // PersonDao.IGNORE silently drops an empty key, so rows whose name
+        // normalizes to empty are skipped (defense in depth, mirrors the
+        // malformed-item skip above) and the trimmed display form is stored
+        // so the Rust parser and this fallback agree on the persisted name.
+        val display = PersonNameNormalizer.displayForm(rawName)
+        val key = PersonNameNormalizer.normalize(display)
+        if (key.isEmpty()) return@mapNotNull null
+        Person(
+          id = o.optLong("id", 0L),
+          name = display,
+          normalizedName = key,
+          phone = o.nullableString("phone"),
+          notes = o.nullableString("notes"),
+          createdAt = o.optLong("createdAt", 0L).takeIf { it != 0L } ?: System.currentTimeMillis(),
+          isArchived = o.optBoolean("isArchived", false)
         )
       }
     } ?: emptyList()

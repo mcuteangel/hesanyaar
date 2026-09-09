@@ -10,6 +10,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import io.github.mojri.hesabyar.domain.utils.PersonNameNormalizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,16 +26,21 @@ import java.io.IOException
     PaymentHistory::class,
     Category::class,
     BankLoan::class,
-    AccountEntity::class
+    AccountEntity::class,
+    Person::class
   ],
-  version = 7,
+  version = 8,
   exportSchema = false
 )
 @TypeConverters(io.github.mojri.hesabyar.data.TypeConverters::class)
 abstract class AppDatabase : RoomDatabase() {
   abstract fun transactionDao(): TransactionDao
 
+  abstract fun transactionLinkDao(): TransactionLinkDao
+
   abstract fun loanDao(): LoanDao
+
+  abstract fun loanPersonOpsDao(): LoanPersonOpsDao
 
   abstract fun installmentDao(): InstallmentDao
 
@@ -45,6 +51,8 @@ abstract class AppDatabase : RoomDatabase() {
   abstract fun bankLoanDao(): BankLoanDao
 
   abstract fun accountDao(): AccountDao
+
+  abstract fun personDao(): PersonDao
 
   companion object {
     @Volatile
@@ -193,6 +201,169 @@ abstract class AppDatabase : RoomDatabase() {
         }
       }
 
+    /**
+     * Phase 1 of the person-ledger redesign (plans/011): additive-only.
+     *
+     * Creates `persons` (unique index on normalizedName), adds nullable
+     * personId to loans AND transactions, then backfills persons from
+     * distinct loans.personName and stamps personId on both tables where
+     * names normalize to the same key.
+     *
+     * The order is intentional: loans are processed first (the identity
+     * source), then transactions are resolved lookup-only — a transaction
+     * is stamped only when its normalized name already maps to a loan-backed
+     * person; transaction-only names keep personId NULL and never spawn a
+     * phantom Person row (see stampPersonIdsOnTransactions and plans/011
+     * §D4 addendum). Display-name tiebreak on a normalized-key collision
+     * goes to the loan that was processed first. See plans/011 for the
+     * rationale.
+     */
+    internal val MIGRATION_7_8 =
+      object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+          db.execSQL(
+            "CREATE TABLE IF NOT EXISTS persons (" +
+              "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+              "name TEXT NOT NULL, normalizedName TEXT NOT NULL, " +
+              "phone TEXT, notes TEXT, createdAt INTEGER NOT NULL, " +
+              "isArchived INTEGER NOT NULL)"
+          )
+          db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_persons_normalizedName ON persons (normalizedName)")
+          try {
+            db.execSQL("ALTER TABLE loans ADD COLUMN personId INTEGER")
+          } catch (e: SQLiteException) {
+            if (e.message?.contains("duplicate column", ignoreCase = true) != true) throw e
+          }
+          try {
+            db.execSQL("ALTER TABLE transactions ADD COLUMN personId INTEGER")
+          } catch (e: SQLiteException) {
+            if (e.message?.contains("duplicate column", ignoreCase = true) != true) throw e
+          }
+
+          val idByNormalized = HashMap<String, Long>()
+          preloadExistingPersons(db, idByNormalized)
+          backfillPersonsFromLoans(db, idByNormalized)
+          stampPersonIdsOnTransactions(db, idByNormalized)
+        }
+
+        /**
+         * Seeds [idByNormalized] from any persons already in the table. This
+         * covers the recovery path: when the `personId` columns already exist
+         * (duplicate-column guard caught), the persons table may already hold
+         * rows from a prior partial migration. Without this preload,
+         * [personIdFor] would re-insert existing normalized names and the
+         * unique index would abort the migration.
+         */
+        private fun preloadExistingPersons(
+          db: SupportSQLiteDatabase,
+          idByNormalized: MutableMap<String, Long>
+        ) {
+          db
+            .query("SELECT id, normalizedName FROM persons")
+            .use { cursor ->
+              while (cursor.moveToNext()) {
+                idByNormalized[cursor.getString(1)] = cursor.getLong(0)
+              }
+            }
+        }
+
+        /** Inserts (or reuses) a person row for [rawName]; returns its id or -1 for blank. */
+        private fun personIdFor(
+          db: SupportSQLiteDatabase,
+          rawName: String,
+          idByNormalized: MutableMap<String, Long>
+        ): Long {
+          val display = PersonNameNormalizer.displayForm(rawName)
+          val key = PersonNameNormalizer.normalize(display)
+          var result = -1L
+          if (display.isNotEmpty() && key.isNotEmpty()) {
+            val existing = idByNormalized[key]
+            result =
+              if (existing != null) {
+                existing
+              } else {
+                val sql =
+                  "INSERT INTO persons (name, normalizedName, phone, notes, createdAt, isArchived) " +
+                    "VALUES (?, ?, NULL, NULL, ?, 0)"
+                val statement = db.compileStatement(sql)
+                val id =
+                  statement.use { s ->
+                    s.bindString(1, display)
+                    s.bindString(2, key)
+                    s.bindLong(3, System.currentTimeMillis())
+                    s.executeInsert()
+                  }
+                if (id != -1L) idByNormalized[key] = id
+                id
+              }
+          }
+          return result
+        }
+
+        private fun backfillPersonsFromLoans(
+          db: SupportSQLiteDatabase,
+          idByNormalized: MutableMap<String, Long>
+        ) {
+          db.compileStatement("UPDATE loans SET personId = ? WHERE id = ?").use { update ->
+            db
+              .query("SELECT id, personName FROM loans WHERE personName IS NOT NULL ORDER BY date ASC, id ASC")
+              .use { cursor ->
+                while (cursor.moveToNext()) {
+                  val loanId = cursor.getLong(0)
+                  val personId = personIdFor(db, cursor.getString(1), idByNormalized)
+                  if (personId == -1L) continue
+                  update.bindLong(1, personId)
+                  update.bindLong(2, loanId)
+                  update.executeUpdateDelete()
+                }
+              }
+          }
+        }
+
+        private fun stampPersonIdsOnTransactions(
+          db: SupportSQLiteDatabase,
+          idByNormalized: MutableMap<String, Long>
+        ) {
+          // Resolve each transaction's personId by looking up its normalized
+          // name in the map pre-populated from loans (the identity source per
+          // migration contract D3). Transactions whose name matches no loan
+          // name keep personId NULL: we must NOT call the insert-capable
+          // personIdFor here, or transaction-only names would spawn phantom
+          // persons that pollute the persons table and surface in the person
+          // ledger. A second pass then issues a single batched UPDATE per
+          // distinct personId instead of one UPDATE per row.
+          val updatesByPersonId = HashMap<Long, MutableList<Long>>()
+          db
+            .query("SELECT id, personName FROM transactions WHERE personName IS NOT NULL")
+            .use { cursor ->
+              while (cursor.moveToNext()) {
+                val rawName = cursor.getString(1)
+                val display = PersonNameNormalizer.displayForm(rawName)
+                val key = if (display.isNotEmpty()) PersonNameNormalizer.normalize(display) else ""
+                val personId = if (key.isNotEmpty()) idByNormalized[key] ?: -1L else -1L
+                if (personId == -1L) continue
+                updatesByPersonId.getOrPut(personId) { mutableListOf() }.add(cursor.getLong(0))
+              }
+            }
+          if (updatesByPersonId.isEmpty()) return
+          // Chunk per person: SQLite's SQLITE_MAX_VARIABLE_NUMBER is 999 on
+          // pre-API-26 (32766 on API 26+). A person with >998 transactions would
+          // overflow the bound-variable limit and abort the migration for that
+          // user. The +1 reserve is for the personId bind.
+          val chunkSize = 900
+          for ((personId, txIds) in updatesByPersonId) {
+            txIds.chunked(chunkSize).forEach { batch ->
+              val placeholders = batch.joinToString(",") { "?" }
+              db.compileStatement("UPDATE transactions SET personId = ? WHERE id IN ($placeholders)").use { stmt ->
+                stmt.bindLong(1, personId)
+                batch.forEachIndexed { i, id -> stmt.bindLong(i + 2, id) }
+                stmt.executeUpdateDelete()
+              }
+            }
+          }
+        }
+      }
+
     internal val MIGRATION_2_3 =
       object : Migration(2, 3) {
         override fun migrate(db: SupportSQLiteDatabase) {
@@ -282,6 +453,23 @@ abstract class AppDatabase : RoomDatabase() {
         }
       }
 
+    /**
+     * Single source of truth for the full migration chain. Used by every
+     * `Room.databaseBuilder(...).addMigrations(...)` call so a new migration
+     * is registered in one place and cannot be omitted from any path
+     * (live DB, plaintext→encrypted transfer, future test factories).
+     */
+    internal val ALL_MIGRATIONS: Array<Migration> =
+      arrayOf(
+        MIGRATION_1_2,
+        MIGRATION_2_3,
+        MIGRATION_3_4,
+        MIGRATION_4_5,
+        MIGRATION_5_6,
+        MIGRATION_6_7,
+        MIGRATION_7_8
+      )
+
     fun getDatabase(context: Context): AppDatabase {
       instance?.let { return it }
       return synchronized(this) {
@@ -301,7 +489,7 @@ abstract class AppDatabase : RoomDatabase() {
               AppDatabase::class.java,
               "hesabyar_database"
             ).openHelperFactory(factory)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            .addMigrations(*ALL_MIGRATIONS)
             .addCallback(DEFAULT_ACCOUNT_SEED_CALLBACK)
             .build()
         instance = db
@@ -342,7 +530,7 @@ abstract class AppDatabase : RoomDatabase() {
       val plaintextDb =
         Room
           .databaseBuilder(context, AppDatabase::class.java, tempName)
-          .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+          .addMigrations(*ALL_MIGRATIONS)
           .build()
 
       val accounts = plaintextDb.accountDao().getAllAccountsBlocking()
@@ -352,6 +540,7 @@ abstract class AppDatabase : RoomDatabase() {
       val bankLoans = plaintextDb.bankLoanDao().getAllBankLoansBlocking()
       val installments = plaintextDb.installmentDao().getAllInstallmentsBlocking()
       val payments = plaintextDb.paymentHistoryDao().getAllPaymentHistoriesBlocking()
+      val persons = plaintextDb.personDao().getAllPersonsIncludingArchivedBlocking()
 
       plaintextDb.close()
 
@@ -366,18 +555,20 @@ abstract class AppDatabase : RoomDatabase() {
           Room
             .databaseBuilder(context, AppDatabase::class.java, "hesabyar_database")
             .openHelperFactory(factory)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            .addMigrations(*ALL_MIGRATIONS)
             .build()
 
-        encryptedDb.runInTransaction {
-          if (accounts.isNotEmpty()) encryptedDb.accountDao().insertAllBlocking(accounts)
-          if (categories.isNotEmpty()) encryptedDb.categoryDao().insertAllBlocking(categories)
-          if (transactions.isNotEmpty()) encryptedDb.transactionDao().insertAllBlocking(transactions)
-          if (loans.isNotEmpty()) encryptedDb.loanDao().insertAllBlocking(loans)
-          if (bankLoans.isNotEmpty()) encryptedDb.bankLoanDao().insertAllBlocking(bankLoans)
-          if (installments.isNotEmpty()) encryptedDb.installmentDao().insertAllBlocking(installments)
-          if (payments.isNotEmpty()) encryptedDb.paymentHistoryDao().insertAllBlocking(payments)
-        }
+        transferPlaintextData(
+          accounts = accounts,
+          categories = categories,
+          transactions = transactions,
+          loans = loans,
+          bankLoans = bankLoans,
+          installments = installments,
+          payments = payments,
+          persons = persons,
+          encryptedDb = encryptedDb
+        )
 
         encryptedDb.close()
 
@@ -385,30 +576,121 @@ abstract class AppDatabase : RoomDatabase() {
         context.getDatabasePath("$tempName-wal").delete()
         context.getDatabasePath("$tempName-shm").delete()
       } catch (e: IOException) {
-        context.getDatabasePath(tempName).copyTo(dbFile, overwrite = true)
-        listOf("-wal", "-shm")
-          .map { context.getDatabasePath("$tempName$it") }
-          .filter { it.exists() }
-          .forEach {
-            it.copyTo(
-              context.getDatabasePath("hesabyar_database${it.name.removePrefix(tempName)}"),
-              overwrite = true
-            )
-          }
+        restoreTempBackupToLive(context, tempName, dbFile)
         throw e
       } catch (e: SQLiteException) {
-        context.getDatabasePath(tempName).copyTo(dbFile, overwrite = true)
-        listOf("-wal", "-shm")
-          .map { context.getDatabasePath("$tempName$it") }
-          .filter { it.exists() }
-          .forEach {
-            it.copyTo(
-              context.getDatabasePath("hesabyar_database${it.name.removePrefix(tempName)}"),
-              overwrite = true
-            )
-          }
+        restoreTempBackupToLive(context, tempName, dbFile)
         throw e
       }
+    }
+
+    private fun restoreTempBackupToLive(
+      context: Context,
+      tempName: String,
+      dbFile: File
+    ) {
+      context.getDatabasePath(tempName).copyTo(dbFile, overwrite = true)
+      listOf("-wal", "-shm")
+        .map { context.getDatabasePath("$tempName$it") }
+        .filter { it.exists() }
+        .forEach {
+          it.copyTo(
+            context.getDatabasePath("hesabyar_database${it.name.removePrefix(tempName)}"),
+            overwrite = true
+          )
+        }
+    }
+
+    /**
+     * Test seam for the plaintext→encrypted transfer. Copies all tables from
+     * the read snapshot into [encryptedDb] in one transaction. Exposed as
+     * `internal` so [AppDatabaseMigrationTest] can invoke the real transfer
+     * path with in-memory DBs (no sqlcipher/header checks) and verify that
+     * archived persons and every other table survive the round-trip.
+     *
+     * Persons are inserted first. [PersonDao.insertAllBlocking] uses
+     * [OnConflictStrategy.IGNORE], so a `normalizedName` collision drops the
+     * source row while its original id is stamped on loans and transactions.
+     * The id remap below re-links those rows to the person id that actually
+     * exists in [encryptedDb] (resolved by normalized key), so no loan or
+     * transaction dangles after a collision.
+     */
+    internal fun transferPlaintextData(
+      accounts: List<AccountEntity>,
+      categories: List<Category>,
+      transactions: List<Transaction>,
+      loans: List<Loan>,
+      bankLoans: List<BankLoan>,
+      installments: List<Installment>,
+      payments: List<PaymentHistory>,
+      persons: List<Person>,
+      encryptedDb: AppDatabase
+    ) {
+      encryptedDb.runInTransaction {
+        if (persons.isNotEmpty()) encryptedDb.personDao().insertAllBlocking(persons)
+        val personIdRemap = personIdRemapForTransfer(persons, encryptedDb)
+        if (accounts.isNotEmpty()) encryptedDb.accountDao().insertAllBlocking(accounts)
+        if (categories.isNotEmpty()) encryptedDb.categoryDao().insertAllBlocking(categories)
+        if (transactions.isNotEmpty()) {
+          encryptedDb.transactionDao().insertAllBlocking(
+            transactions.map { it.copy(personId = remapPersonId(it.personId, personIdRemap)) }
+          )
+        }
+        if (loans.isNotEmpty()) {
+          encryptedDb.loanDao().insertAllBlocking(
+            loans.map { it.copy(personId = remapPersonId(it.personId, personIdRemap)) }
+          )
+        }
+        if (bankLoans.isNotEmpty()) encryptedDb.bankLoanDao().insertAllBlocking(bankLoans)
+        if (installments.isNotEmpty()) encryptedDb.installmentDao().insertAllBlocking(installments)
+        if (payments.isNotEmpty()) encryptedDb.paymentHistoryDao().insertAllBlocking(payments)
+      }
+    }
+
+    /**
+     * Builds a source-person-id → stored-person-id map for a transfer. A
+     * mapping exists only when [PersonDao.insertAllBlocking] skipped the
+     * source row (normalized-key collision) and a different row carries that
+     * key in the target.
+     */
+    private fun personIdRemapForTransfer(
+      persons: List<Person>,
+      encryptedDb: AppDatabase
+    ): Map<Long, Long> {
+      if (persons.isEmpty()) return emptyMap()
+      val idByKey =
+        encryptedDb
+          .personDao()
+          .getAllPersonsIncludingArchivedBlocking()
+          .associateBy({ it.normalizedName }, { it.id })
+      return persons
+        .mapNotNull { source ->
+          val storedId = idByKey[source.normalizedName] ?: return@mapNotNull null
+          if (storedId != source.id) source.id to storedId else null
+        }.toMap()
+    }
+
+    private fun remapPersonId(
+      personId: Long?,
+      remap: Map<Long, Long>
+    ): Long? = personId?.let { remap[it] ?: it }
+
+    /** In-memory variant that reads from [plaintextDb] and writes to [encryptedDb]. */
+    internal fun transferPlaintextData(
+      plaintextDb: AppDatabase,
+      encryptedDb: AppDatabase
+    ) {
+      transferPlaintextData(
+        accounts = plaintextDb.accountDao().getAllAccountsBlocking(),
+        categories = plaintextDb.categoryDao().getAllCategoriesBlocking(),
+        transactions = plaintextDb.transactionDao().getAllTransactionsBlocking(),
+        loans = plaintextDb.loanDao().getAllLoansBlocking(),
+        bankLoans = plaintextDb.bankLoanDao().getAllBankLoansBlocking(),
+        installments = plaintextDb.installmentDao().getAllInstallmentsBlocking(),
+        payments = plaintextDb.paymentHistoryDao().getAllPaymentHistoriesBlocking(),
+        persons = plaintextDb.personDao().getAllPersonsIncludingArchivedBlocking(),
+        encryptedDb = encryptedDb
+      )
     }
   }
 }

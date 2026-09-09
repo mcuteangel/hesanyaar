@@ -29,6 +29,11 @@ interface CategoryDao {
   @Query("SELECT COUNT(*) FROM categories")
   suspend fun getCategoryCount(): Int
 
+  // REPLACE-restore mirror: the backup always carries the full category set,
+  // so stale local categories (custom or renamed) must not survive it.
+  @Query("DELETE FROM categories")
+  suspend fun deleteAllCategories()
+
   @Query("SELECT * FROM categories ORDER BY isDefault DESC, name ASC")
   fun getAllCategoriesBlocking(): List<Category>
 
@@ -64,6 +69,52 @@ interface TransactionDao {
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   fun insertAllBlocking(transactions: List<Transaction>)
+
+  @Query("UPDATE transactions SET personName = :newName WHERE personId = :personId")
+  suspend fun syncTransactionPersonNames(
+    personId: Long,
+    newName: String
+  )
+
+  @Query("UPDATE transactions SET personName = :newName WHERE personId IS NULL AND personName = :oldName")
+  suspend fun syncTransactionPersonNamesForNullId(
+    oldName: String,
+    newName: String
+  )
+
+  // Person deletion keeps the denormalized personName but drops the dangling
+  // id reference, so backups never export personId values without a person row.
+  @Query("UPDATE transactions SET personId = NULL WHERE personId = :personId")
+  suspend fun clearTransactionPersonIds(personId: Long)
+}
+
+/**
+ * Linkage cleanup operations for transactions whose existence is tied to a
+ * loan or installment. Split from [TransactionDao] to keep the main DAO
+ * under the detekt TooManyFunctions threshold.
+ */
+@Dao
+interface TransactionLinkDao {
+  // Deletes the expense/income transaction created by LoanDelegate
+  // .addPaymentToLoan for one payment (same person, Loans category, amount
+  // and date identify the generated row).
+  @Query(
+    "DELETE FROM transactions WHERE personName = :personName AND categoryId = :categoryId " +
+      "AND amount = :amount AND date = :date"
+  )
+  suspend fun deleteLoanPaymentTransaction(
+    personName: String,
+    categoryId: Long,
+    amount: Long,
+    date: Long
+  )
+
+  // Reversal link for the expense recorded when an installment was paid.
+  @Query("DELETE FROM transactions WHERE installmentId = :installmentId AND categoryId = :categoryId")
+  suspend fun deleteTransactionForInstallment(
+    installmentId: Long,
+    categoryId: Long
+  )
 }
 
 @Dao
@@ -94,6 +145,28 @@ interface LoanDao {
 
   @Query("SELECT * FROM loans ORDER BY date DESC")
   fun getAllLoansBlocking(): List<Loan>
+
+  @Query("UPDATE loans SET personName = :newName WHERE personId = :personId")
+  suspend fun syncLoanPersonNames(
+    personId: Long,
+    newName: String
+  )
+
+  @Query("UPDATE loans SET personName = :newName WHERE personId IS NULL AND personName = :oldName")
+  suspend fun syncLoanPersonNamesForNullId(
+    oldName: String,
+    newName: String
+  )
+}
+
+/**
+ * Person-clearing side of loan updates. Split from [LoanDao] to keep the
+ * main DAO under the detekt TooManyFunctions threshold.
+ */
+@Dao
+interface LoanPersonOpsDao {
+  @Query("UPDATE loans SET personId = NULL WHERE personId = :personId")
+  suspend fun clearLoanPersonIds(personId: Long)
 }
 
 @Dao
@@ -164,6 +237,9 @@ interface PaymentHistoryDao {
   @Query("SELECT * FROM payment_history WHERE loanId = :loanId ORDER BY date DESC")
   fun getPaymentHistoryForLoan(loanId: Long): Flow<List<PaymentHistory>>
 
+  @Query("SELECT * FROM payment_history WHERE loanId = :loanId ORDER BY date DESC")
+  suspend fun getPaymentHistoriesForLoanSync(loanId: Long): List<PaymentHistory>
+
   @Query("DELETE FROM payment_history WHERE loanId = :loanId")
   suspend fun deletePaymentHistoryForLoan(loanId: Long)
 
@@ -184,6 +260,45 @@ interface PaymentHistoryDao {
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   fun insertAllBlocking(payments: List<PaymentHistory>)
+}
+
+@Dao
+interface PersonDao {
+  @Query("SELECT * FROM persons WHERE isArchived = 0 ORDER BY name")
+  fun getAllPersons(): Flow<List<Person>>
+
+  // Backup paths (export, plaintext→encrypted transfer, tests) need an
+  // unfiltered blocking read so archived rows round-trip losslessly. Other
+  // DAOs follow the same split: live-UI Flow/Blocking variants filter,
+  // bulk/blocking for backup/export don't.
+  @Query("SELECT * FROM persons ORDER BY name")
+  fun getAllPersonsIncludingArchivedBlocking(): List<Person>
+
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  fun insertAllBlocking(persons: List<Person>)
+
+  @Query("SELECT * FROM persons WHERE id = :id LIMIT 1")
+  suspend fun getPersonById(id: Long): Person?
+
+  @Query("SELECT * FROM persons WHERE normalizedName = :normalizedName LIMIT 1")
+  suspend fun getPersonByNormalizedName(normalizedName: String): Person?
+
+  // IGNORE + unique(normalizedName): a race that inserts the same dedup key
+  // twice keeps the first row and returns -1; callers re-query on -1.
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  suspend fun insertPerson(person: Person): Long
+
+  @Query("DELETE FROM persons")
+  suspend fun deleteAllPersons()
+
+  @Update
+  suspend fun updatePerson(person: Person)
+
+  @Delete
+  suspend fun deletePerson(person: Person)
+
+  // D3 rename sync moved to LoanDao/TransactionDao — PersonDao now owns
+  // only person persistence; repository coordinates the cross-table rename.
 }
 
 @Dao

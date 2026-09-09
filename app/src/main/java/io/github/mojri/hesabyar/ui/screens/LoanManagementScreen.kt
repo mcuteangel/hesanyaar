@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import io.github.mojri.hesabyar.R
 import io.github.mojri.hesabyar.data.Loan
 import io.github.mojri.hesabyar.data.LoanType
+import io.github.mojri.hesabyar.domain.utils.LoanEditCalculator
 import io.github.mojri.hesabyar.ui.CurrencyFormatter
 import io.github.mojri.hesabyar.ui.LoanViewModel
 import io.github.mojri.hesabyar.ui.SettingsViewModel
@@ -38,6 +39,11 @@ import io.github.mojri.hesabyar.ui.designsystem.ShapeTokens
 import io.github.mojri.hesabyar.ui.designsystem.SpacingTokens
 import io.github.mojri.hesabyar.ui.utils.formatPersianDate
 import java.util.*
+
+private const val TOMAN_TO_RIAL_FACTOR = 10L
+
+/** Parses a display-amount string to the numeric amount; null for non-numeric input. */
+internal fun numericAmount(text: String): Long? = text.toLongOrNull()
 
 @Composable
 private fun LoanTypeSelector(
@@ -554,13 +560,14 @@ private class RepaymentFormState {
 }
 
 @Composable
-private fun AddLoanDialog(
+internal fun AddLoanDialog(
   initialType: LoanType,
   showMessage: (String) -> Unit,
   onConfirm: (personName: String, type: LoanType, amountRial: Long, description: String, date: Long) -> Unit,
   onDismiss: () -> Unit
 ) {
   val form = remember { LoanFormState(initialType) }
+  val tooLargeMessage = stringResource(R.string.loan_amount_too_large)
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -576,8 +583,14 @@ private fun AddLoanDialog(
     confirmButton = {
       HesabyarButton(
         onClick = {
+          val maxTomanDisplay = Long.MAX_VALUE / TOMAN_TO_RIAL_FACTOR
           val amountDisplay = form.amountText.toLongOrNull() ?: 0L
-          if (form.personName.isNotBlank() && amountDisplay > 0L) {
+          if (
+            CurrencyFormatter.currentUnit == io.github.mojri.hesabyar.ui.CurrencyUnit.TOMAN &&
+            amountDisplay > maxTomanDisplay
+          ) {
+            showMessage(tooLargeMessage)
+          } else if (form.personName.isNotBlank() && amountDisplay > 0L) {
             onConfirm(
               form.personName,
               form.loanType,
@@ -602,7 +615,7 @@ private fun AddLoanDialog(
   )
 }
 
-private class LoanFormState(
+internal class LoanFormState(
   initialType: LoanType,
   initialPersonName: String = "",
   initialAmountRial: Long = 0L,
@@ -617,7 +630,7 @@ private class LoanFormState(
 }
 
 @Composable
-private fun EditLoanDialog(
+internal fun EditLoanDialog(
   loan: Loan,
   onUpdate: (Loan) -> Unit,
   showMessage: (String) -> Unit,
@@ -627,7 +640,15 @@ private fun EditLoanDialog(
     remember {
       LoanFormState(loan.type, loan.personName, loan.originalAmount, loan.description, loan.date)
     }
-  val initialAmountText = form.amountText
+  // Capture the amount shown when the dialog opened once. Reading form.amountText
+  // here would re-read the live value on every recomposition, so the
+  // "amount unchanged" branch would never trigger and repayment preservation
+  // would be skipped (silent financial-data loss).
+  val initialAmountText =
+    remember(loan.originalAmount) {
+      CurrencyFormatter.fromRial(loan.originalAmount).toString()
+    }
+  val tooLargeMessage = stringResource(R.string.loan_amount_too_large)
 
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -642,7 +663,16 @@ private fun EditLoanDialog(
     text = { LoanFormFields(form) },
     confirmButton = {
       HesabyarButton(
-        onClick = { submitLoanEdit(form, loan, initialAmountText, onUpdate, showMessage) },
+        onClick = {
+          submitLoanEdit(
+            form = form,
+            loan = loan,
+            initialAmountText = initialAmountText,
+            onUpdate = onUpdate,
+            showMessage = showMessage,
+            tooLargeMessage = tooLargeMessage
+          )
+        },
         text = "ذخیره تغییرات"
       )
     },
@@ -656,21 +686,32 @@ private fun EditLoanDialog(
   )
 }
 
-private fun submitLoanEdit(
+internal fun submitLoanEdit(
   form: LoanFormState,
   loan: Loan,
   initialAmountText: String,
   onUpdate: (Loan) -> Unit,
-  showMessage: (String) -> Unit
+  showMessage: (String) -> Unit,
+  tooLargeMessage: String
 ) {
+  // Compare the parsed numeric amounts, never raw strings: the input field
+  // may group digits or trim differently than the snapshot, and relying on
+  // exact string equality would wrongly fall through to recompute and
+  // truncate odd Rials in TOMAN mode.
+  val initialAmountNumeric = numericAmount(initialAmountText)
+  val maxTomanDisplay = Long.MAX_VALUE / TOMAN_TO_RIAL_FACTOR
   val amountDisplay = form.amountText.toLongOrNull() ?: 0L
   when {
     form.personName.isBlank() || amountDisplay <= 0L ->
       showMessage("لطفا اطلاعات را کامل و صحیح پر کنید")
 
+    CurrencyFormatter.currentUnit == io.github.mojri.hesabyar.ui.CurrencyUnit.TOMAN &&
+      amountDisplay > maxTomanDisplay ->
+      showMessage(tooLargeMessage)
+
     // Display-unit round trips truncate odd Rials in Toman mode; when the
     // amount field was left untouched, keep the stored amounts as-is.
-    form.amountText == initialAmountText ->
+    numericAmount(form.amountText) == initialAmountNumeric ->
       onUpdate(
         loan.copy(
           personName = form.personName,
@@ -688,14 +729,14 @@ private fun submitLoanEdit(
       if (amountRial < paidSoFar) {
         showMessage("مبلغ جدید نمی‌تواند کمتر از بازپرداخت‌های ثبت‌شده باشد")
       } else {
-        val newRemaining = amountRial - paidSoFar
+        val r = LoanEditCalculator.recompute(loan, amountRial)
         onUpdate(
           loan.copy(
             personName = form.personName,
             type = form.loanType,
-            originalAmount = amountRial,
-            remainingAmount = newRemaining,
-            isSettled = newRemaining == 0L,
+            originalAmount = r.originalAmount,
+            remainingAmount = r.remainingAmount,
+            isSettled = r.isSettled,
             description = form.description,
             date = form.customDate
           )

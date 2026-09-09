@@ -8,6 +8,7 @@ import io.github.mojri.hesabyar.data.HesabyarRepositoryInterface
 import io.github.mojri.hesabyar.data.Installment
 import io.github.mojri.hesabyar.data.Loan
 import io.github.mojri.hesabyar.data.PaymentHistory
+import io.github.mojri.hesabyar.data.Person
 import io.github.mojri.hesabyar.data.Transaction
 import io.github.mojri.hesabyar.domain.usecase.ManageInstallmentUseCase
 import kotlinx.coroutines.Dispatchers
@@ -177,5 +178,20 @@ class InstallmentViewModelTest {
     override suspend fun getTransactionCountForAccount(accountId: Long): Int = 0
 
     override suspend fun getMaxDisplayOrder(): Int = -1
+
+    override val allPersons: Flow<List<Person>> = flowOf(emptyList())
+
+    override suspend fun getAllPersonsIncludingArchived(): List<Person> = emptyList()
+
+    override suspend fun getPersonById(id: Long): Person? = null
+
+    override suspend fun upsertPerson(person: Person): Person = person.copy(id = 1L)
+
+    override suspend fun renamePerson(
+      personId: Long,
+      newName: String
+    ): Boolean = true
+
+    override suspend fun deletePerson(person: Person) {}
   }
 }

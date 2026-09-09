@@ -137,6 +137,7 @@ class RustBridgeTest {
         amount = 5_000_000L,
         description = "test",
         personName = null,
+        personId = null,
         date = 1_700_000_000_000L,
         dueDate = null,
         installmentId = null,
@@ -147,6 +148,7 @@ class RustBridgeTest {
       Loan(
         id = 1L,
         personName = "علی",
+        personId = null,
         loanType = "DEBTOR",
         originalAmount = 1_000_000L,
         remainingAmount = 1_000_000L,
@@ -299,6 +301,7 @@ class RustBridgeTest {
       bankLoans = emptyList(),
       paymentHistories = emptyList(),
       categories = emptyList(),
-      accounts = emptyList()
+      accounts = emptyList(),
+      persons = emptyList()
     )
 }

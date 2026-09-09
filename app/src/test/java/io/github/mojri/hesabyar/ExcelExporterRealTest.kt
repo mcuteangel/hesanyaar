@@ -61,6 +61,7 @@ class ExcelExporterRealTest {
       listOf(
         Loan(
           personName = "علی",
+          personId = null,
           type = LoanType.DEBTOR,
           originalAmount = 5_000_000L,
           remainingAmount = 3_000_000L,
@@ -68,6 +69,7 @@ class ExcelExporterRealTest {
         ),
         Loan(
           personName = "رضا",
+          personId = null,
           type = LoanType.CREDITOR,
           originalAmount = 2_000_000L,
           remainingAmount = 2_000_000L,

@@ -74,6 +74,13 @@ pub struct Transaction {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none", alias = "personName")]
     pub person_name: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_zero_as_none",
+        alias = "personId"
+    )]
+    pub person_id: Option<i64>,
     pub date: i64,
     #[serde(
         default,
@@ -155,6 +162,13 @@ pub struct Loan {
     pub id: i64,
     #[serde(alias = "personName")]
     pub person_name: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_zero_as_none",
+        alias = "personId"
+    )]
+    pub person_id: Option<i64>,
     #[serde(rename = "type", alias = "loanType")]
     pub loan_type: String,
     #[serde(alias = "originalAmount")]
@@ -218,6 +232,26 @@ pub struct PaymentHistory {
     pub date: i64,
     #[serde(default)]
     pub notes: Option<String>,
+}
+
+/// A person ledger identity (person-ledger redesign, plans/011). Display name
+/// is the first trimmed original spelling; `normalized_name` is the dedup key
+/// (see `PersonNameNormalizer` on the Kotlin side, an ADR-001 permanent
+/// fallback because Room migrations cannot load the native library).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, uniffi::Record)]
+#[serde(rename_all = "camelCase")]
+pub struct Person {
+    pub id: i64,
+    pub name: String,
+    pub normalized_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "phone")]
+    pub phone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "notes")]
+    pub notes: Option<String>,
+    #[serde(default, alias = "createdAt")]
+    pub created_at: i64,
+    #[serde(default, alias = "isArchived")]
+    pub is_archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
@@ -402,6 +436,8 @@ pub struct BackupPayload {
     pub categories: Vec<Category>,
     #[serde(default)]
     pub accounts: Vec<Account>,
+    #[serde(default)]
+    pub persons: Vec<Person>,
 }
 
 impl Default for BackupPayload {
@@ -417,6 +453,7 @@ impl Default for BackupPayload {
             payment_histories: Vec::new(),
             categories: Vec::new(),
             accounts: Vec::new(),
+            persons: Vec::new(),
         }
     }
 }
@@ -512,6 +549,7 @@ mod tests {
                 amount: 50000,
                 description: "Test".to_string(),
                 person_name: None,
+                person_id: None,
                 date: 1710000000000,
                 due_date: None,
                 installment_id: None,
@@ -530,6 +568,7 @@ mod tests {
             }],
             categories: vec![],
             accounts: vec![],
+            ..Default::default()
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: BackupPayload = serde_json::from_str(&json).unwrap();
@@ -556,6 +595,7 @@ mod tests {
                 amount: 300000,
                 description: "Transfer between accounts".to_string(),
                 person_name: None,
+                person_id: None,
                 date: 1710000000000,
                 due_date: None,
                 installment_id: None,
@@ -568,6 +608,7 @@ mod tests {
             payment_histories: vec![],
             categories: vec![],
             accounts: vec![],
+            ..Default::default()
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: BackupPayload = serde_json::from_str(&json).unwrap();
@@ -611,6 +652,103 @@ mod tests {
         assert!(!payload.installments[0].is_paid);
         assert_eq!(payload.payment_histories.len(), 1);
         assert_eq!(payload.payment_histories[0].loan_id, 2);
+    }
+
+    #[test]
+    fn test_backup_payload_parses_persons_camel_case() {
+        // Kotlin exporter writes camelCase keys; Rust must parse that shape.
+        let json = r#"{
+            "version": 1,
+            "timestamp": 1710000000000,
+            "appVersion": "1.0",
+            "persons": [
+                {
+                    "id": 1,
+                    "name": "علی رضایی",
+                    "normalizedName": "علی رضایی",
+                    "phone": "09120000000",
+                    "notes": "همکار قدیمی",
+                    "createdAt": 1000,
+                    "isArchived": false
+                },
+                {
+                    "id": 2,
+                    "name": "سارا",
+                    "normalizedName": "سارا",
+                    "createdAt": 2000,
+                    "isArchived": true
+                }
+            ]
+        }"#;
+        let payload: BackupPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(payload.persons.len(), 2);
+        let ali = &payload.persons[0];
+        assert_eq!(ali.id, 1);
+        assert_eq!(ali.name, "علی رضایی");
+        assert_eq!(ali.normalized_name, "علی رضایی");
+        assert_eq!(ali.phone.as_deref(), Some("09120000000"));
+        assert_eq!(ali.notes.as_deref(), Some("همکار قدیمی"));
+        assert_eq!(ali.created_at, 1000);
+        assert!(!ali.is_archived);
+        let sara = &payload.persons[1];
+        assert_eq!(sara.id, 2);
+        assert_eq!(sara.phone, None);
+        assert_eq!(sara.notes, None);
+        assert_eq!(sara.created_at, 2000);
+        assert!(sara.is_archived);
+    }
+
+    #[test]
+    fn test_backup_payload_round_trips_persons() {
+        let original = BackupPayload {
+            version: 1,
+            timestamp: 1710000000000,
+            app_version: "1.0.0".to_string(),
+            transactions: vec![],
+            loans: vec![],
+            installments: vec![],
+            bank_loans: vec![],
+            payment_histories: vec![],
+            categories: vec![],
+            accounts: vec![],
+            persons: vec![
+                Person {
+                    id: 1,
+                    name: "علی رضایی".to_string(),
+                    normalized_name: "علی رضایی".to_string(),
+                    phone: Some("09120000000".to_string()),
+                    notes: Some("همکار قدیمی".to_string()),
+                    created_at: 1000,
+                    is_archived: false,
+                },
+                Person {
+                    id: 2,
+                    name: "سارا".to_string(),
+                    normalized_name: "سارا".to_string(),
+                    phone: None,
+                    notes: None,
+                    created_at: 2000,
+                    is_archived: true,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: BackupPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.persons.len(), 2);
+        assert_eq!(restored.persons[0], original.persons[0]);
+        assert_eq!(restored.persons[1], original.persons[1]);
+    }
+
+    #[test]
+    fn test_backup_payload_persons_field_defaults_missing() {
+        // Old backups without a `persons` key default to empty (backward-compatible).
+        let json = r#"{
+            "version": 1,
+            "timestamp": 1710000000000,
+            "appVersion": "1.0"
+        }"#;
+        let payload: BackupPayload = serde_json::from_str(json).unwrap();
+        assert!(payload.persons.is_empty());
     }
 
     #[test]
@@ -658,6 +796,7 @@ mod tests {
             }],
             categories: vec![],
             accounts: vec![],
+            ..Default::default()
         };
         let json = serde_json::to_string(&payload).unwrap();
         let restored: BackupPayload = serde_json::from_str(&json).unwrap();
@@ -712,6 +851,7 @@ mod tests {
             ],
             categories: vec![],
             accounts: vec![],
+            ..Default::default()
         };
         let json = serde_json::to_string(&payload).unwrap();
         let restored: BackupPayload = serde_json::from_str(&json).unwrap();
@@ -797,6 +937,7 @@ mod tests {
                     updated_at: 0,
                 },
             ],
+            ..Default::default()
         };
         let json = serde_json::to_string(&payload).unwrap();
         let restored: BackupPayload = serde_json::from_str(&json).unwrap();
@@ -830,6 +971,7 @@ mod tests {
             amount: 50000,
             description: "Test".to_string(),
             person_name: None,
+            person_id: None,
             date: 1710000000000,
             due_date: None,
             installment_id: None,
@@ -855,5 +997,188 @@ mod tests {
         let tx: Transaction = serde_json::from_str(json).unwrap();
         assert_eq!(tx.account_id, 1);
         assert!(tx.destination_account_id.is_none());
+    }
+
+    #[test]
+    fn test_loan_person_id_none_omits_field_and_roundtrips() {
+        let loan = Loan {
+            id: 7,
+            person_name: "Ali".to_string(),
+            person_id: None,
+            loan_type: "DEBTOR".to_string(),
+            original_amount: 5000000,
+            remaining_amount: 3000000,
+            description: "test".to_string(),
+            date: 1710000000000,
+            is_settled: false,
+        };
+        let json = serde_json::to_string(&loan).unwrap();
+        // The None id must be omitted entirely, never serialized as a sentinel
+        // or null, so backups cannot regress on the person link.
+        assert!(!json.contains("personId"));
+        let restored: Loan = serde_json::from_str(&json).unwrap();
+        assert!(restored.person_id.is_none());
+        assert_eq!(restored.person_name, "Ali");
+    }
+
+    #[test]
+    fn test_transaction_person_id_zero_sentinel_deserializes_to_none() {
+        let json = r#"{
+            "id": 1,
+            "type": "EXPENSE",
+            "categoryId": 1,
+            "amount": 1000,
+            "description": "x",
+            "date": 0,
+            "personId": 0
+        }"#;
+        let tx: Transaction = serde_json::from_str(json).unwrap();
+        assert_eq!(tx.person_id, None);
+    }
+
+    #[test]
+    fn test_loan_person_id_zero_sentinel_deserializes_to_none() {
+        let json = r#"{
+            "id": 1,
+            "personName": "Ali",
+            "type": "DEBTOR",
+            "originalAmount": 1000,
+            "remainingAmount": 500,
+            "description": "x",
+            "date": 0,
+            "isSettled": false,
+            "personId": 0
+        }"#;
+        let loan: Loan = serde_json::from_str(json).unwrap();
+        assert_eq!(loan.person_id, None);
+    }
+
+    #[test]
+    fn test_person_id_absent_deserializes_to_none() {
+        let tx_json = r#"{
+            "id": 1,
+            "type": "EXPENSE",
+            "categoryId": 1,
+            "amount": 1000,
+            "description": "x",
+            "date": 0
+        }"#;
+        let tx: Transaction = serde_json::from_str(tx_json).unwrap();
+        assert_eq!(tx.person_id, None);
+        let loan_json = r#"{
+            "id": 1,
+            "personName": "Ali",
+            "type": "DEBTOR",
+            "originalAmount": 1000,
+            "remainingAmount": 500,
+            "description": "x",
+            "date": 0,
+            "isSettled": false
+        }"#;
+        let loan: Loan = serde_json::from_str(loan_json).unwrap();
+        assert_eq!(loan.person_id, None);
+    }
+
+    #[test]
+    fn test_person_id_null_deserializes_to_none() {
+        let tx_json = r#"{
+            "id": 1,
+            "type": "EXPENSE",
+            "categoryId": 1,
+            "amount": 1000,
+            "description": "x",
+            "date": 0,
+            "personId": null
+        }"#;
+        let tx: Transaction = serde_json::from_str(tx_json).unwrap();
+        assert_eq!(tx.person_id, None);
+        let loan_json = r#"{
+            "id": 1,
+            "personName": "Ali",
+            "type": "DEBTOR",
+            "originalAmount": 1000,
+            "remainingAmount": 500,
+            "description": "x",
+            "date": 0,
+            "isSettled": false,
+            "personId": null
+        }"#;
+        let loan: Loan = serde_json::from_str(loan_json).unwrap();
+        assert_eq!(loan.person_id, None);
+    }
+
+    #[test]
+    fn test_person_id_valid_round_trip() {
+        let tx_json = r#"{
+            "id": 1,
+            "type": "EXPENSE",
+            "categoryId": 1,
+            "amount": 1000,
+            "description": "x",
+            "date": 0,
+            "personId": 42
+        }"#;
+        let tx: Transaction = serde_json::from_str(tx_json).unwrap();
+        assert_eq!(tx.person_id, Some(42));
+        let serialized = serde_json::to_string(&tx).unwrap();
+        let restored: Transaction = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(restored.person_id, Some(42));
+        let loan_json = r#"{
+            "id": 1,
+            "personName": "Ali",
+            "type": "DEBTOR",
+            "originalAmount": 1000,
+            "remainingAmount": 500,
+            "description": "x",
+            "date": 0,
+            "isSettled": false,
+            "personId": 42
+        }"#;
+        let loan: Loan = serde_json::from_str(loan_json).unwrap();
+        assert_eq!(loan.person_id, Some(42));
+        let serialized = serde_json::to_string(&loan).unwrap();
+        let restored: Loan = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(restored.person_id, Some(42));
+    }
+
+    #[test]
+    fn test_transaction_person_id_none_skips_serializing() {
+        let tx = Transaction {
+            id: 1,
+            tx_type: TransactionType::Expense,
+            category_id: 1,
+            amount: 1000,
+            description: "x".to_string(),
+            person_name: None,
+            person_id: None,
+            date: 0,
+            due_date: None,
+            installment_id: None,
+            account_id: 1,
+            destination_account_id: None,
+        };
+        let json = serde_json::to_string(&tx).unwrap();
+        assert!(!json.contains("personId"));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v.get("personId"), None);
+    }
+
+    #[test]
+    fn test_loan_person_id_some_serializes() {
+        let loan = Loan {
+            id: 1,
+            person_name: "Ali".to_string(),
+            person_id: Some(7),
+            loan_type: "DEBTOR".to_string(),
+            original_amount: 1000,
+            remaining_amount: 500,
+            description: "x".to_string(),
+            date: 0,
+            is_settled: false,
+        };
+        let json = serde_json::to_string(&loan).unwrap();
+        assert!(json.contains("\"personId\":7"));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v.get("personId").and_then(|v| v.as_i64()), Some(7));
     }
 }

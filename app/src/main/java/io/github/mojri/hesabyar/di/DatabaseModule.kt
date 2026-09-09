@@ -13,6 +13,7 @@ import io.github.mojri.hesabyar.data.CategoryDao
 import io.github.mojri.hesabyar.data.InstallmentDao
 import io.github.mojri.hesabyar.data.LoanDao
 import io.github.mojri.hesabyar.data.PaymentHistoryDao
+import io.github.mojri.hesabyar.data.PersonDao
 import io.github.mojri.hesabyar.data.TransactionDao
 import javax.inject.Singleton
 
@@ -45,4 +46,7 @@ object DatabaseModule {
 
   @Provides
   fun provideAccountDao(database: AppDatabase): AccountDao = database.accountDao()
+
+  @Provides
+  fun providePersonDao(database: AppDatabase): PersonDao = database.personDao()
 }

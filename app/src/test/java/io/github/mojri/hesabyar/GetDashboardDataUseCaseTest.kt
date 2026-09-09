@@ -55,6 +55,7 @@ class GetDashboardDataUseCaseTest {
     settled: Boolean = false
   ) = Loan(
     personName = "test",
+    personId = null,
     type = type,
     originalAmount = remaining,
     remainingAmount = remaining,

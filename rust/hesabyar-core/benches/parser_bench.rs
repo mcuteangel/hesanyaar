@@ -53,6 +53,7 @@ fn bench_budget_advice(c: &mut Criterion) {
             amount: (i + 1) * 10000,
             description: format!("Transaction {}", i),
             person_name: None,
+            person_id: None,
             date: 1711000000000 - (i * 86400000),
             due_date: None,
             installment_id: None,
@@ -102,6 +103,7 @@ fn bench_search(c: &mut Criterion) {
             } else {
                 None
             },
+            person_id: None,
             date: 1711000000000 - (i * 86400000),
             due_date: None,
             installment_id: None,
@@ -171,6 +173,7 @@ fn bench_validation(c: &mut Criterion) {
         amount: 50000,
         description: "test transaction".to_string(),
         person_name: None,
+        person_id: None,
         date: 1710000000000,
         due_date: None,
         installment_id: None,
@@ -191,6 +194,7 @@ fn bench_validation(c: &mut Criterion) {
             amount: 50000 + i,
             description: format!("transaction {}", i),
             person_name: None,
+            person_id: None,
             date: 1710000000000,
             due_date: None,
             installment_id: None,
@@ -210,6 +214,7 @@ fn bench_validation(c: &mut Criterion) {
         payment_histories: vec![],
         categories: vec![],
         accounts: vec![],
+        ..Default::default()
     };
 
     c.bench_function("validate_backup_payload_1000_tx", |b| {
@@ -273,6 +278,7 @@ fn make_tx(
         amount,
         description: format!("Transaction {}", id),
         person_name: None,
+        person_id: None,
         date: date_ms,
         due_date: None,
         installment_id: None,
@@ -297,6 +303,7 @@ fn make_loan(id: i64, loan_type: &str, original: i64, remaining: i64, settled: b
     Loan {
         id,
         person_name: format!("Person {}", id),
+        person_id: None,
         loan_type: loan_type.to_string(),
         original_amount: original,
         remaining_amount: remaining,

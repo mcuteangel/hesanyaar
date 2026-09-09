@@ -1,6 +1,7 @@
 package io.github.mojri.hesabyar.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.io.Serializable
 
@@ -85,6 +86,22 @@ data class Category(
   }
 }
 
+@Entity(
+  tableName = "persons",
+  indices = [Index(value = ["normalizedName"], unique = true)]
+)
+data class Person(
+  @PrimaryKey(autoGenerate = true) val id: Long = 0,
+  // First trimmed original spelling seen; never normalized for display.
+  val name: String,
+  // Dedup key from PersonNameNormalizer; unique across the table.
+  val normalizedName: String,
+  val phone: String? = null,
+  val notes: String? = null,
+  val createdAt: Long = System.currentTimeMillis(),
+  val isArchived: Boolean = false
+)
+
 @Entity(tableName = "transactions")
 data class Transaction(
   @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -94,6 +111,11 @@ data class Transaction(
   val amount: Long,
   val description: String,
   val personName: String? = null,
+  // Nullable reference to persons (NOT an enforced Room FK — the migration
+  // creates a plain INTEGER column). Denormalized personName stays the
+  // display source (D3). Nullable: legacy rows and rows whose name predates
+  // the persons table.
+  val personId: Long? = null,
   val date: Long = System.currentTimeMillis(),
   val dueDate: Long? = null,
   val installmentId: Long? = null,
@@ -115,6 +137,10 @@ const val DEFAULT_ACCOUNT_ID = 1L
 data class Loan(
   @PrimaryKey(autoGenerate = true) val id: Long = 0,
   val personName: String,
+  // Nullable reference to persons (NOT an enforced Room FK — the migration
+  // creates a plain INTEGER column). Denormalized personName stays the
+  // display source (D3). Nullable: legacy rows created before the persons table.
+  val personId: Long? = null,
   val type: LoanType,
   // Rial
   val originalAmount: Long,

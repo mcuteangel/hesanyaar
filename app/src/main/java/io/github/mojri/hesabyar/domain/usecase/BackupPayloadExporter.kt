@@ -9,6 +9,7 @@ import io.github.mojri.hesabyar.data.HesabyarRepositoryInterface
 import io.github.mojri.hesabyar.data.Installment
 import io.github.mojri.hesabyar.data.Loan
 import io.github.mojri.hesabyar.data.PaymentHistory
+import io.github.mojri.hesabyar.data.Person
 import io.github.mojri.hesabyar.data.Transaction
 import kotlinx.coroutines.flow.firstOrNull
 import org.json.JSONArray
@@ -94,6 +95,7 @@ class BackupPayloadExporter(
     val curBankLoans = repository.allBankLoans.firstOrNull() ?: emptyList()
     val allPayments = repository.getAllPaymentHistories()
     val curAccounts = repository.allAccounts.firstOrNull() ?: emptyList()
+    val curPersons = repository.getAllPersonsIncludingArchived()
 
     rootJson.put("categories", buildCategoriesArray(curCategories))
 
@@ -108,6 +110,8 @@ class BackupPayloadExporter(
     rootJson.put("paymentHistories", buildPaymentHistoriesArray(allPayments))
 
     rootJson.put("accounts", buildAccountsArray(curAccounts, encryptionKey))
+
+    rootJson.put("persons", buildPersonsArray(curPersons, encryptionKey))
 
     return rootJson
   }
@@ -141,6 +145,7 @@ class BackupPayloadExporter(
           put("amount", it.amount)
           put("description", it.description)
           put("personName", it.personName ?: "")
+          put("personId", it.personId ?: JSONObject.NULL)
           put("date", it.date)
           put("dueDate", it.dueDate ?: 0L)
           put("installmentId", it.installmentId ?: 0L)
@@ -159,6 +164,7 @@ class BackupPayloadExporter(
         JSONObject().apply {
           put("id", it.id)
           put("personName", it.personName)
+          put("personId", it.personId ?: JSONObject.NULL)
           put("type", it.type.name)
           put("originalAmount", it.originalAmount)
           put("remainingAmount", it.remainingAmount)
@@ -226,6 +232,46 @@ class BackupPayloadExporter(
       )
     }
     return paymentsArray
+  }
+
+  private fun buildPersonsArray(
+    persons: List<Person>,
+    encryptionKey: SecretKey? = null
+  ): JSONArray {
+    val personsArray = JSONArray()
+    persons.forEach {
+      personsArray.put(
+        JSONObject().apply {
+          put("id", it.id)
+          put("name", it.name)
+          put("normalizedName", it.normalizedName)
+          if (encryptionKey != null) {
+            put(
+              "phone",
+              BackupCipher.encryptOrNull(
+                it.phone,
+                encryptionKey,
+                BackupCipher.personFieldAad(it.id, "phone")
+              )
+            )
+            put(
+              "notes",
+              BackupCipher.encryptOrNull(
+                it.notes,
+                encryptionKey,
+                BackupCipher.personFieldAad(it.id, "notes")
+              )
+            )
+          } else {
+            put("phone", it.phone ?: JSONObject.NULL)
+            put("notes", it.notes ?: JSONObject.NULL)
+          }
+          put("createdAt", it.createdAt)
+          put("isArchived", it.isArchived)
+        }
+      )
+    }
+    return personsArray
   }
 
   private fun buildAccountsArray(

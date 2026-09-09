@@ -415,6 +415,7 @@ mod tests {
             amount,
             description: String::new(),
             person_name: None,
+            person_id: None,
             date,
             due_date: None,
             installment_id: None,
@@ -896,6 +897,7 @@ mod tests {
         let loans = vec![Loan {
             id: 1,
             person_name: "".into(),
+            person_id: None,
             loan_type: "CREDITOR".into(),
             original_amount: i64::MAX,
             remaining_amount: i64::MAX,

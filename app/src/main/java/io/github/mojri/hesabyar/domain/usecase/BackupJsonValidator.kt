@@ -108,6 +108,7 @@ class BackupJsonValidator(
     validateBackupPaymentHistories(backup.paymentHistories, errors)
     validateBackupBankLoans(backup.bankLoans, errors)
     validateBackupAccounts(backup.accounts, errors)
+    PersonBackupValidator.validate(backup.persons, errors) { resId, args -> message(resId, *args) }
     BackupReferenceValidator { resId, args -> message(resId, *args) }.validate(backup, errors)
 
     return if (errors.isEmpty()) {
@@ -242,6 +243,7 @@ class BackupJsonValidator(
       paymentHistories = RustMappers.mapPaymentHistories(paymentHistories),
       bankLoans = RustMappers.mapBankLoans(bankLoans),
       categories = RustMappers.mapCategories(categories),
-      accounts = RustMappers.mapAccounts(accounts)
+      accounts = RustMappers.mapAccounts(accounts),
+      persons = RustMappers.mapPersons(persons)
     )
 }

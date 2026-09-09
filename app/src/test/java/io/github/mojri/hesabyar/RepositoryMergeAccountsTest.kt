@@ -54,6 +54,7 @@ class RepositoryMergeAccountsTest {
       database.categoryDao(),
       database.bankLoanDao(),
       database.accountDao(),
+      database.personDao(),
       database
     )
 

@@ -8,12 +8,16 @@ import io.github.mojri.hesabyar.data.AccountType
 import io.github.mojri.hesabyar.data.AppDatabase
 import io.github.mojri.hesabyar.data.BackupPayload
 import io.github.mojri.hesabyar.data.HesabyarRepository
+import io.github.mojri.hesabyar.data.Person
 import io.github.mojri.hesabyar.data.Transaction
 import io.github.mojri.hesabyar.data.TransactionType
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -60,6 +64,7 @@ class RepositoryBackupRestoreTest {
       database.categoryDao(),
       database.bankLoanDao(),
       database.accountDao(),
+      database.personDao(),
       database
     )
 
@@ -218,6 +223,104 @@ class RepositoryBackupRestoreTest {
     accountId = accountId,
     destinationAccountId = destinationAccountId
   )
+
+  @Test
+  fun replaceAllFromBackupPersistsPersonsWithAllFields() =
+    runTest {
+      val repo = createRepository()
+      val persons =
+        listOf(
+          Person(
+            id = 1L,
+            name = "علی رضایی",
+            normalizedName = "علی رضایی",
+            phone = "09120000000",
+            notes = "همکار قدیمی",
+            createdAt = 1000L,
+            isArchived = false
+          ),
+          Person(
+            id = 2L,
+            name = "سارا",
+            normalizedName = "سارا",
+            phone = null,
+            notes = null,
+            createdAt = 2000L,
+            isArchived = true
+          )
+        )
+
+      repo.replaceAllFromBackup(BackupPayload(persons = persons))
+
+      // getAllPersons* excludes archived rows (isArchived = 0); only Ali is visible here,
+      // while Sara is persisted but filtered out of the public list.
+      val stored = database.personDao().getAllPersonsIncludingArchivedBlocking()
+      val visible = database.personDao().getAllPersons().first()
+      assertEquals("Archived person excluded from non-archived list", 1, visible.size)
+      assertEquals("Unfiltered read still surfaces Sara for round-trip integrity", 2, stored.size)
+      val ali =
+        requireNotNull(database.personDao().getPersonById(1L)) {
+          "Ali must be persisted"
+        }
+      assertEquals("علی رضایی", ali.name)
+      assertEquals("علی رضایی", ali.normalizedName)
+      assertEquals("09120000000", ali.phone)
+      assertEquals("همکار قدیمی", ali.notes)
+      assertEquals(1000L, ali.createdAt)
+      assertFalse(ali.isArchived)
+      // The archived row is still persisted and addressable by id.
+      val sara = requireNotNull(database.personDao().getPersonById(2L)) { "Archived person persisted and addressable" }
+      assertEquals("سارا", sara.name)
+      assertEquals("سارا", sara.normalizedName)
+      assertNull(sara.phone)
+      assertEquals(2000L, sara.createdAt)
+      assertTrue(sara.isArchived)
+    }
+
+  @Test
+  fun mergeFromBackupDeduplicatesPersonsByNormalizedNameAndKeepsLocalId() =
+    runTest {
+      val repo = createRepository()
+      repo.replaceAllFromBackup(
+        BackupPayload(
+          persons =
+            listOf(
+              Person(
+                id = 1L,
+                name = "علی",
+                normalizedName = "علی",
+                phone = "0912",
+                createdAt = 1000L
+              )
+            )
+        )
+      )
+
+      // Second merge: same normalized name, different display spelling + new phone.
+      repo.mergeFromBackup(
+        BackupPayload(
+          persons =
+            listOf(
+              Person(
+                id = 99L,
+                name = "علي",
+                normalizedName = "علی",
+                phone = "0919",
+                createdAt = 2000L
+              )
+            )
+        )
+      )
+
+      val stored = database.personDao().getAllPersonsIncludingArchivedBlocking()
+      assertEquals("Normalized names dedup to one row", 1, stored.size)
+      val kept = requireNotNull(stored.single())
+      assertEquals("Local id preserved (backup id ignored on conflict)", 1L, kept.id)
+      assertEquals("Local name preserved on conflict (backup does not overwrite identity)", "علی", kept.name)
+      assertEquals("Normalized key preserved on conflict", "علی", kept.normalizedName)
+      assertEquals("Local createdAt preserved on conflict", 1000L, kept.createdAt)
+      assertEquals("Local phone kept when already present (backup fills blanks only)", "0912", kept.phone)
+    }
 
   private fun backupPayload(
     accounts: List<AccountEntity>,

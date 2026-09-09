@@ -25,6 +25,7 @@ data class BackupPayload(
   val categories: List<Category> = emptyList(),
   val bankLoans: List<BankLoan> = emptyList(),
   val accounts: List<AccountEntity> = emptyList(),
+  val persons: List<Person> = emptyList(),
   val settings: BackupSettings = BackupSettings()
 )
 

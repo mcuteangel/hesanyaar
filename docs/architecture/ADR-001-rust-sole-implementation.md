@@ -39,6 +39,7 @@ The following features retain Kotlin-side fallback implementations permanently. 
 | Offline NLP parser | Must work without any native library; provides core offline entry |
 | Backup JSON parse/validate | Recovery path must not depend on Rust; backup is a data-recovery lifeline |
 | AI advice validation | Lightweight sanitization that must work independently of Rust |
+| Person-name normalization (dedup-key derivation) | Room migrations cannot load the native library; the migration backfill must run inside the migration itself (plans/011-personal-loan-ledger-redesign.md §D4). One shared Kotlin util in `domain/utils`; runtime create/rename/merge paths reuse it so dedup semantics never drift between migration and runtime. This is persisted-identity data hygiene (entity mapping), not financial calculation |
 
 ### Temporary Kotlin Fallbacks (Scheduled for Removal)
 

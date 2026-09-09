@@ -2,103 +2,13 @@ package io.github.mojri.hesabyar.data
 
 import io.github.mojri.hesabyar.data.AccountEntity
 import io.github.mojri.hesabyar.data.BankLoan
-import kotlinx.coroutines.flow.Flow
 
-interface HesabyarRepositoryInterface {
-  val allTransactions: Flow<List<Transaction>>
-  val allLoans: Flow<List<Loan>>
-  val allInstallments: Flow<List<Installment>>
-  val allCategories: Flow<List<Category>>
-  val allBankLoans: Flow<List<BankLoan>>
-  val allAccounts: Flow<List<AccountEntity>>
-
-  fun getTransactionsInRange(
-    start: Long,
-    end: Long
-  ): Flow<List<Transaction>>
-
-  fun getCategoriesByType(type: String): Flow<List<Category>>
-
-  suspend fun getCategoryById(id: Long): Category?
-
-  suspend fun getCategoryByKey(key: String): Category?
-
-  suspend fun insertCategory(category: Category): Long
-
-  suspend fun updateCategory(category: Category)
-
-  suspend fun deleteCategory(category: Category)
-
-  suspend fun insertTransaction(transaction: Transaction): Long
-
-  suspend fun deleteTransaction(transaction: Transaction)
-
-  suspend fun updateTransaction(transaction: Transaction)
-
-  suspend fun insertLoan(loan: Loan): Long
-
-  suspend fun updateLoan(loan: Loan)
-
-  suspend fun deleteLoan(loan: Loan)
-
-  fun getPaymentHistoryForLoan(loanId: Long): Flow<List<PaymentHistory>>
-
-  suspend fun addPaymentToLoan(
-    loanId: Long,
-    amount: Long,
-    notes: String,
-    customDate: Long? = null
-  ): Boolean
-
-  suspend fun insertInstallment(installment: Installment): Long
-
-  suspend fun updateInstallment(installment: Installment)
-
-  suspend fun deleteInstallment(installment: Installment)
-
-  suspend fun getBankLoanById(id: Long): BankLoan?
-
-  suspend fun insertBankLoan(bankLoan: BankLoan): Long
-
-  suspend fun updateBankLoan(bankLoan: BankLoan)
-
-  suspend fun deleteBankLoan(bankLoan: BankLoan)
-
-  suspend fun getInstallmentsByBankLoanId(bankLoanId: Long): List<Installment>
-
-  suspend fun addBankLoanWithInstallments(
-    bankLoan: BankLoan,
-    installments: List<Installment>
-  ): Long
-
-  // Account CRUD
-  suspend fun getActiveAccounts(): List<AccountEntity>
-
-  suspend fun getAllAccounts(): List<AccountEntity>
-
-  suspend fun getAccountById(id: Long): AccountEntity?
-
-  suspend fun insertAccount(account: AccountEntity): Long
-
-  suspend fun updateAccount(account: AccountEntity)
-
-  suspend fun deleteAccount(account: AccountEntity)
-
-  suspend fun getTransactionCountForAccount(accountId: Long): Int
-
-  suspend fun getMaxDisplayOrder(): Int
-
-  suspend fun importBackup(
-    transactions: List<Transaction>,
-    loans: List<Loan>,
-    installments: List<Installment>,
-    paymentHistories: List<PaymentHistory>,
-    bankLoans: List<BankLoan> = emptyList()
-  )
-
-  suspend fun replaceAllFromBackup(backup: BackupPayload)
-
-  suspend fun mergeFromBackup(backup: BackupPayload)
-
-  suspend fun getAllPaymentHistories(): List<PaymentHistory>
-}
+interface HesabyarRepositoryInterface :
+  PersonRepositoryInterface,
+  AccountOps,
+  TransactionOps,
+  CategoryOps,
+  LoanOps,
+  InstallmentOps,
+  BankLoanOps,
+  BackupOps

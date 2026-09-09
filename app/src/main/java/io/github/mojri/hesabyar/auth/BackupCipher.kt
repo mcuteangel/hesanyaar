@@ -98,6 +98,11 @@ object BackupCipher {
     fieldName: String
   ): String = "accountId:$accountId|field:$fieldName"
 
+  fun personFieldAad(
+    personId: Long,
+    fieldName: String
+  ): String = "personId:$personId|field:$fieldName"
+
   /**
    * Encrypts [plaintext] using AES-GCM with a random IV and AAD binding.
    *

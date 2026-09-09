@@ -50,6 +50,7 @@ class GetAnalyticsUseCaseRustTest {
   ): Loan =
     Loan(
       personName = person,
+      personId = null,
       type = type,
       originalAmount = original,
       remainingAmount = remaining,

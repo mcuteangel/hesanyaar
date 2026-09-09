@@ -148,6 +148,7 @@ pub fn validate_backup(payload: &BackupPayload) -> Result<(), HesabyarError> {
             && payload.bank_loans.is_empty()
             && payload.categories.is_empty()
             && payload.accounts.is_empty()
+            && payload.persons.is_empty()
         {
             return Err(HesabyarError::BackupValidation {
                 detail: "Backup contains no data".to_string(),
@@ -245,6 +246,16 @@ pub fn validate_backup(payload: &BackupPayload) -> Result<(), HesabyarError> {
         if let Some(first_err) =
             crate::validation::validate_accounts_and_references(payload).first()
         {
+            return Err(HesabyarError::BackupValidation {
+                detail: first_err.clone(),
+            });
+        }
+
+        // Validate persons: field checks (blank name, duplicate key, duplicate id)
+        // and cross-references (positive person_id must point to a declared person).
+        // The same [validate_persons] function runs in validate_backup_payload, so
+        // malformed person-only payloads cannot slip through the FFI path.
+        if let Some(first_err) = crate::validation::validate_persons(payload).first() {
             return Err(HesabyarError::BackupValidation {
                 detail: first_err.clone(),
             });

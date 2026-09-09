@@ -35,6 +35,7 @@ internal class BackupReferenceValidator(
     validateTransferStructure(backup.transactions, errors)
     validateCategoryReferences(backup.transactions, backup.categories, errors)
     validateLoanReferences(backup.paymentHistories, backup.loans, errors)
+    validatePersonReferences(backup, errors)
   }
 
   /**
@@ -159,6 +160,29 @@ internal class BackupReferenceValidator(
     paymentHistories.forEachIndexed { i, payment ->
       if (payment.loanId > 0 && payment.loanId !in loanIds) {
         errors.add(message(R.string.backup_error_payment_invalid_loan, arrayOf<Any>(i, payment.loanId.toString())))
+      }
+    }
+  }
+
+  /**
+   * Person cross-reference — positive personId must resolve to a declared person.
+   * Mirrors Rust validation.rs person_id check.
+   */
+  private fun validatePersonReferences(
+    backup: BackupPayload,
+    errors: MutableList<String>
+  ) {
+    val personIds = backup.persons.map { it.id }.toSet()
+    backup.loans.forEachIndexed { i, loan ->
+      val pid = loan.personId
+      if (pid != null && pid > 0 && pid !in personIds) {
+        errors.add(message(R.string.backup_error_loan_invalid_person, arrayOf<Any>(i, pid.toString())))
+      }
+    }
+    backup.transactions.forEachIndexed { i, tx ->
+      val pid = tx.personId
+      if (pid != null && pid > 0 && pid !in personIds) {
+        errors.add(message(R.string.backup_error_transaction_invalid_person, arrayOf<Any>(i, pid.toString())))
       }
     }
   }

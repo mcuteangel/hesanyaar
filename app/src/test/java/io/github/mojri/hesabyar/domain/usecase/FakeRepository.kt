@@ -8,6 +8,7 @@ import io.github.mojri.hesabyar.data.HesabyarRepositoryInterface
 import io.github.mojri.hesabyar.data.Installment
 import io.github.mojri.hesabyar.data.Loan
 import io.github.mojri.hesabyar.data.PaymentHistory
+import io.github.mojri.hesabyar.data.Person
 import io.github.mojri.hesabyar.data.Transaction
 import io.github.mojri.hesabyar.domain.exception.CannotDeleteLastActiveAccountException
 import kotlinx.coroutines.CompletableDeferred
@@ -248,4 +249,97 @@ internal class FakeRepository : HesabyarRepositoryInterface {
   }
 
   override suspend fun getMaxDisplayOrder(): Int = accountsList.maxOfOrNull { it.displayOrder } ?: -1
+
+  private val _allPersons = MutableStateFlow<List<Person>>(emptyList())
+  override val allPersons: Flow<List<Person>> = _allPersons.asStateFlow()
+
+  private val personsList = mutableListOf<Person>()
+
+  /** Publishes only non-archived persons, mirroring production [PersonDao.getAllPersons]. */
+  private fun publishPersons() {
+    _allPersons.value = personsList.filter { !it.isArchived }
+  }
+
+  /**
+   * Adds a person to [getAllPersonsIncludingArchived] so encrypted-export tests
+   * can carry person PII. The list starts empty, so tests that never call this
+   * keep the previous "no persons" behaviour.
+   */
+  fun addPerson(person: Person) {
+    personsList.add(person)
+    publishPersons()
+  }
+
+  override suspend fun getAllPersonsIncludingArchived(): List<Person> = personsList.toList()
+
+  override suspend fun getPersonById(id: Long): Person? = personsList.firstOrNull { it.id == id }
+
+  /**
+   * Mirrors [PersonDelegate.upsertPerson]: match-or-create by normalized name;
+   * on collision, merge contact fields (phone/notes) into the existing row.
+   */
+  override suspend fun upsertPerson(person: Person): Person {
+    val existingIdx = personsList.indexOfFirst { it.normalizedName == person.normalizedName }
+    return if (existingIdx >= 0) {
+      val existing = personsList[existingIdx]
+      val merged =
+        existing.copy(
+          phone = person.phone ?: existing.phone,
+          notes = person.notes ?: existing.notes
+        )
+      if (merged != existing) {
+        personsList[existingIdx] = merged
+        publishPersons()
+      }
+      merged
+    } else {
+      val withId = person.copy(id = nextId++)
+      personsList.add(withId)
+      publishPersons()
+      withId
+    }
+  }
+
+  /**
+   * Mirrors [PersonDelegate.renamePerson]: update the person's display name and
+   * normalized key, then sync denormalized personName on linked loans and
+   * transactions.
+   */
+  override suspend fun renamePerson(
+    personId: Long,
+    newName: String
+  ): Boolean {
+    val idx = personsList.indexOfFirst { it.id == personId }
+    val display = newName.trim()
+    val key =
+      io.github.mojri.hesabyar.domain.utils.PersonNameNormalizer
+        .normalize(display)
+    if (idx < 0 || !canRename(display, key, personId)) return false
+    personsList[idx] = personsList[idx].copy(name = display, normalizedName = key)
+    publishPersons()
+    _allLoans.value =
+      _allLoans.value.map { tx ->
+        if (tx.personId == personId) tx.copy(personName = display) else tx
+      }
+    _allTransactions.value =
+      _allTransactions.value.map { tx ->
+        if (tx.personId == personId) tx.copy(personName = display) else tx
+      }
+    return true
+  }
+
+  private fun canRename(
+    display: String,
+    key: String,
+    personId: Long
+  ): Boolean {
+    if (display.isEmpty() || key.isEmpty()) return false
+    val clash = personsList.firstOrNull { it.normalizedName == key && it.id != personId }
+    return clash == null
+  }
+
+  override suspend fun deletePerson(person: Person) {
+    personsList.removeIf { it.id == person.id }
+    publishPersons()
+  }
 }

@@ -9,8 +9,10 @@ import io.github.mojri.hesabyar.data.Installment
 import io.github.mojri.hesabyar.data.Loan
 import io.github.mojri.hesabyar.data.LoanType
 import io.github.mojri.hesabyar.data.PaymentHistory
+import io.github.mojri.hesabyar.data.Person
 import io.github.mojri.hesabyar.data.Transaction
 import io.github.mojri.hesabyar.data.TransactionType
+import io.github.mojri.hesabyar.domain.utils.PersonNameNormalizer
 import io.github.mojri.hesabyar.ui.AccountAnalytics
 import io.github.mojri.hesabyar.ui.AccountDashboardSummary
 import java.math.RoundingMode
@@ -177,6 +179,7 @@ object RustMappers {
       amount = tx.amount,
       description = tx.description,
       personName = tx.personName,
+      personId = tx.personId,
       date = tx.date,
       dueDate = tx.dueDate,
       installmentId = tx.installmentId,
@@ -188,6 +191,7 @@ object RustMappers {
     io.github.mojri.hesabyar.rust.Loan(
       id = loan.id,
       personName = loan.personName,
+      personId = loan.personId,
       loanType = loan.type.name,
       originalAmount = loan.originalAmount,
       remainingAmount = loan.remainingAmount,
@@ -281,6 +285,7 @@ object RustMappers {
       amount = tx.amount,
       description = tx.description,
       personName = tx.personName,
+      personId = tx.personId,
       date = tx.date,
       dueDate = tx.dueDate,
       installmentId = tx.installmentId,
@@ -292,6 +297,7 @@ object RustMappers {
     Loan(
       id = loan.id,
       personName = loan.personName,
+      personId = loan.personId,
       type = LoanType.valueOf(loan.loanType),
       originalAmount = loan.originalAmount,
       remainingAmount = loan.remainingAmount,
@@ -372,6 +378,44 @@ object RustMappers {
 
   fun fromRustAccounts(list: List<io.github.mojri.hesabyar.rust.Account>): List<AccountEntity> =
     list.map { fromRustAccount(it) }
+
+  fun fromRustPerson(rust: io.github.mojri.hesabyar.rust.Person): Person {
+    val display = PersonNameNormalizer.displayForm(rust.name)
+    val normalizedName = PersonNameNormalizer.normalize(display)
+    // Keep the person id but never echo the raw name into the exception: it
+    // can carry PII and reaches logs through BackupJsonParser error handling.
+    require(normalizedName.isNotEmpty()) { "Person ${rust.id} normalizes to empty" }
+    return Person(
+      id = rust.id,
+      name = display,
+      normalizedName = normalizedName,
+      phone = rust.phone,
+      notes = rust.notes,
+      createdAt = if (rust.createdAt != 0L) rust.createdAt else System.currentTimeMillis(),
+      isArchived = rust.isArchived
+    )
+  }
+
+  fun fromRustPersons(list: List<io.github.mojri.hesabyar.rust.Person>): List<Person> = list.map { fromRustPerson(it) }
+
+  fun mapPerson(person: Person): io.github.mojri.hesabyar.rust.Person {
+    val normalizedName =
+      PersonNameNormalizer.normalize(PersonNameNormalizer.displayForm(person.name))
+    require(normalizedName.isNotEmpty()) {
+      "Person ${person.id} has empty normalizedName after re-derivation"
+    }
+    return io.github.mojri.hesabyar.rust.Person(
+      id = person.id,
+      name = person.name,
+      normalizedName = normalizedName,
+      phone = person.phone,
+      notes = person.notes,
+      createdAt = person.createdAt,
+      isArchived = person.isArchived
+    )
+  }
+
+  fun mapPersons(list: List<Person>): List<io.github.mojri.hesabyar.rust.Person> = list.map { mapPerson(it) }
 
   fun mapAccount(account: AccountEntity): io.github.mojri.hesabyar.rust.Account =
     io.github.mojri.hesabyar.rust.Account(
