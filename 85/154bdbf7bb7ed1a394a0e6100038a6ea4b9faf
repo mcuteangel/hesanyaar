@@ -1,0 +1,30 @@
+app/src/test/java/io/github/mojri/hesabyar/BankLoanDelegateRollbackTest.kt
+  s_19607846d3778e::t_d53b46bee9ea46 1-142,147-170
+  s_19607846d3778e::t_6cc321562be56f 143-146
+app/src/test/java/io/github/mojri/hesabyar/InstallmentUpdateTransactionTest.kt
+  s_19607846d3778e::t_e30cd2ad9309f1 1-99,105-108,114,120-145
+  s_19607846d3778e::t_8aaf5d2f4f1095 100-104,109-113,115-119
+app/src/test/java/io/github/mojri/hesabyar/domain/usecase/EncryptedBackupDecryptionTest.kt
+  s_19607846d3778e::t_149b3b5ed1c074 196-279
+app/src/test/java/io/github/mojri/hesabyar/data/AppDatabaseMigration7to8Test.kt
+  s_19607846d3778e::t_9901883e926afd 454-456
+  s_19607846d3778e::t_830f94bae0b0c9 400-406,435-453,457-462
+app/src/test/java/io/github/mojri/hesabyar/ui/screens/LoanManagementDialogTest.kt
+  s_19607846d3778e::t_2b6b59a52fe02d 68,73,85-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "85154bdbf7bb7ed1a394a0e6100038a6ea4b9faf",
+  "prompts": {},
+  "sessions": {
+    "s_19607846d3778e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3e13ba1-e2c4-40ca-aa44-540e53bb94ff",
+        "model": "glm-5.3"
+      },
+      "human_author": "mcuteangel <mpcuteangel@Gmail.com>"
+    }
+  }
+}
